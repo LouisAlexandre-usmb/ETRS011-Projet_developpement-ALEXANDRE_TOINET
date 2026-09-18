@@ -18,3 +18,5 @@ Objectif de base :
 
 #### SOMMAIRE ####
 - [Cahier des charges](https://univsmb-my.sharepoint.com/:w:/r/personal/leonit_behrami_etu_univ-smb_fr/_layouts/15/Doc.aspx?sourcedoc=%7B6F239EF8-9192-495F-8A10-D4E81A0760EA%7D&file=Cahier%20des%20charges.docx&action=default&mobileredirect=true)
+
+- [Planning](https://canva.link/12wkb8e5b6src8n)
