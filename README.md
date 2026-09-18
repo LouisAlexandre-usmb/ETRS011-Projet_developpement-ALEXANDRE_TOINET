@@ -7,9 +7,7 @@ Objectif de base :
   2. Établir un cahier des charges détaillé 
   3. Pour le développement : 
     a. Établir une architecture précise et détaillée (modélisation, …) 
-
     b. Réaliser et justifier les choix technologiques 
-
     c. Établir un planning de travail. 
 
   Dans ce développement, il vous sera également demandé :  
