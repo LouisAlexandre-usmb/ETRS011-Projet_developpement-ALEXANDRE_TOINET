@@ -10,10 +10,10 @@ Objectif de base :
     b. Réaliser et justifier les choix technologiques<br> 
     c. Établir un planning de travail.<br>
 
-  Dans ce développement, il vous sera également demandé :  
-    • De conserver une trace de vos échanges avec l’IA 
-    • D’expliquer les raisons qui vous ont permis de retenir (ou rejeter) certaines propositions. 
-    • De pouvoir expliquer certaines parties de code retenues
+  Dans ce développement, il vous sera également demandé :<br>
+    • De conserver une trace de vos échanges avec l’IA<br>
+    • D’expliquer les raisons qui vous ont permis de retenir (ou rejeter) certaines propositions.<br>
+    • De pouvoir expliquer certaines parties de code retenues<br>
 
 
 #### SOMMAIRE ####
