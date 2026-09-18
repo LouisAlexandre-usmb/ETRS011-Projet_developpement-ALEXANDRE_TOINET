@@ -5,10 +5,10 @@ Système de supervision d'un parc de matériels réseau via le protocole SNMP - 
 Objectif de base :
   1. Étudier l’existant (les solutions existantes sur le marché) sous différentes formes : Convivialité, déploiement, mise à jour     logicielle, … 
   2. Établir un cahier des charges détaillé 
-  3. Pour le développement : 
-    a. Établir une architecture précise et détaillée (modélisation, …) 
-    b. Réaliser et justifier les choix technologiques 
-    c. Établir un planning de travail. 
+  3. Pour le développement :<br>
+    a. Établir une architecture précise et détaillée (modélisation, …)<br>
+    b. Réaliser et justifier les choix technologiques<br> 
+    c. Établir un planning de travail.<br>
 
   Dans ce développement, il vous sera également demandé :  
     • De conserver une trace de vos échanges avec l’IA 
