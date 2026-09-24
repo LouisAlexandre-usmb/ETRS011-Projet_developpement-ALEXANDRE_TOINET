@@ -16,12 +16,11 @@ Ce document est un document de travail, amené à être révisé au fil de l'ava
 
 
 
-<custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Suivi%20des%20versions%22%7D%7D" />
-   **Version** | **Date**       | **Auteur(s)**               | **Description**                                                                 |
- |-------------|----------------|-----------------------------|---------------------------------------------------------------------------------|
- | 1.1         | 18/09/2026     | Louis ALEXANDRE & Mattis TOINET | Première version de travail — trame et premier jet de contenu, à compléter. |
- | 1.2         | 23/09/2026     | Louis ALEXANDRE             | Rédaction de la partie 5. Parcours de la donnée.                                |
- | 1.3         | 24/09/2026     | Mattis TOINET               | Réfection complète du document + publication GitHub.                            |
+| **Version** | **Date** | **Auteur(s)** | **Description** |
+|-------------|----------|---------------|-----------------|
+| 1.1 | 18/09/2026 | Louis ALEXANDRE & Mattis TOINET | Première version de travail — trame et premier jet de contenu, à compléter. |
+| 1.2 | 23/09/2026 | Louis ALEXANDRE | Rédaction de la partie 5. Parcours de la donnée. |
+| 1.3 | 24/09/2026 | Mattis TOINET | Réfection complète du document + publication GitHub. |
 
 ---
 
