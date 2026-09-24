@@ -119,18 +119,16 @@ Le logiciel devra permettre de :
 #### **🔹 Gestion de l'inventaire des équipements**
 Fonctionnalités pour déclarer, organiser et maintenir à jour la liste des équipements supervisés.
 
-
-
 <custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Gestion%20de%20l'inventaire%22%7D%7D" />
- | **Fonctionnalité** | **Description** |
- |--------------------|----------------|
- | **Ajout d'un équipement** | Nom/alias, adresse IP (ou nom d'hôte), description libre, paramètres d'accès SNMP (version, communauté), intervalle de polling spécifique. |
- | **Test de connectivité** | Requête SNMP simple (ex: lecture de `sysDescr`) pour vérifier la configuration avant intégration au cycle de supervision. |
- | **Modification** | Changement d'IP, de communauté, de description, etc. |
- | **Suppression** | Avec confirmation explicite (le devenir de l'historique est traité dans la partie [5.6](#56-politique-de-conservation-et-de-suppression)). |
- | **Relations topologiques** | Définition de relations parent-enfant entre équipements pour la corrélation d'alertes. |
- | **Regroupement** | Étiquettes simples (par site ou type) pour faciliter le filtrage dans le tableau de bord. |
- | **Recherche et filtrage** | Par nom, statut ou groupe. |
+   **Fonctionnalité**          | **Description**                                                                                     |
+ |-----------------------------|-----------------------------------------------------------------------------------------------------|
+ | **Ajout d'un équipement**   | Nom/alias, adresse IP (ou nom d'hôte), description libre, paramètres d'accès SNMP (version, communauté), intervalle de polling spécifique. |
+ | **Test de connectivité**   | Requête SNMP simple (ex: lecture de `sysDescr`) pour vérifier la configuration avant intégration au cycle de supervision. |
+ | **Modification**            | Changement d'IP, de communauté, de description, etc.                                              |
+ | **Suppression**             | Avec confirmation explicite (le devenir de l'historique est traité dans la [partie 5.6](#56-politique-de-conservation-et-de-suppression)). |
+ | **Relations topologiques** | Définition de relations parent-enfant entre équipements pour la corrélation d'alertes.          |
+ | **Regroupement**            | Étiquettes simples (par site ou type) pour faciliter le filtrage dans le tableau de bord.         |
+ | **Recherche et filtrage**   | Par nom, statut ou groupe.                                                                         |
 
 ---
 
