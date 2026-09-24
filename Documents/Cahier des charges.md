@@ -119,8 +119,7 @@ Le logiciel devra permettre de :
 #### **🔹 Gestion de l'inventaire des équipements**
 Fonctionnalités pour déclarer, organiser et maintenir à jour la liste des équipements supervisés.
 
-<custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Gestion%20de%20l'inventaire%22%7D%7D" />
-   **Fonctionnalité**          | **Description**                                                                                     |
+ |  **Fonctionnalité**          | **Description**                                                                                     |
  |-----------------------------|-----------------------------------------------------------------------------------------------------|
  | **Ajout d'un équipement**   | Nom/alias, adresse IP (ou nom d'hôte), description libre, paramètres d'accès SNMP (version, communauté), intervalle de polling spécifique. |
  | **Test de connectivité**   | Requête SNMP simple (ex: lecture de `sysDescr`) pour vérifier la configuration avant intégration au cycle de supervision. |
