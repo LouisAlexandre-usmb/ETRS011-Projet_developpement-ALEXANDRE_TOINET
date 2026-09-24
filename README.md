@@ -1,22 +1,46 @@
 # ETRS011-Projet_developpement-ALEXANDRE_TOINET
-Système de supervision d'un parc de matériels réseau via le protocole SNMP - Projet de Master 2 TRI réalisé dans le cadre de la ressource ETRS011.
+**Système de supervision d'un parc de matériels réseau via le protocole SNMP**
+*Projet de Master 2 TRI réalisé dans le cadre de la ressource ETRS011.*
 
+---
 
-Objectif de base :
-  1. Étudier l’existant (les solutions existantes sur le marché) sous différentes formes : Convivialité, déploiement, mise à jour     logicielle, … 
-  2. Établir un cahier des charges détaillé 
-  3. Pour le développement :<br>
-    a. Établir une architecture précise et détaillée (modélisation, …)<br>
-    b. Réaliser et justifier les choix technologiques<br> 
-    c. Établir un planning de travail.<br>
+## **Objectifs du projet**
 
-  Dans ce développement, il vous sera également demandé :<br>
-    • De conserver une trace de vos échanges avec l’IA<br>
-    • D’expliquer les raisons qui vous ont permis de retenir (ou rejeter) certaines propositions.<br>
-    • De pouvoir expliquer certaines parties de code retenues<br>
+### **Objectifs de base**
+1. **Étudier l’existant** :
+   - Analyser les solutions existantes sur le marché sous différents angles :
+     - Convivialité,
+     - Déploiement,
+     - Mise à jour logicielle, etc.
 
+2. **Établir un cahier des charges détaillé** :
+   - Définir les besoins, les fonctionnalités et les contraintes du projet.
 
-#### SOMMAIRE ####
-- [Cahier des charges](https://univsmb-my.sharepoint.com/:w:/r/personal/leonit_behrami_etu_univ-smb_fr/_layouts/15/Doc.aspx?sourcedoc=%7BD143D54B-94CB-477E-B1E5-3D67564CD7B9%7D&file=Cahier%20des%20charge.docx&action=default&mobileredirect=true)
+3. **Développement** :
+   a. **Établir une architecture précise et détaillée** :
+      - Modélisation du système.
+   b. **Réaliser et justifier les choix technologiques** :
+      - Sélection des outils, langages et frameworks.
+   c. **Établir un planning de travail** :
+      - Répartition des tâches et échéances.
 
-- [Planning](https://canva.link/12wkb8e5b6src8n)
+### **Exigences supplémentaires**
+Dans le cadre de ce développement, il sera également demandé de :
+- Conserver une **trace des échanges avec l’IA** (ex: discussions, suggestions, décisions).
+- **Expliquer les raisons** ayant conduit à retenir ou rejeter certaines propositions.
+- **Justifier certaines parties de code** retenues (choix algorithmiques, optimisations, etc.).
+
+---
+
+---
+
+## **📌 Sommaire**
+
+### **Documents clés**
+- **[Cahier des charges](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charge.docx)**
+  > *Note* : GitHub ne permet pas de visualiser directement les fichiers `.docx` dans l'interface web. Pour consulter ce document :
+  > - **Téléchargez-le** depuis le lien ci-dessus et ouvrez-le avec un logiciel compatible (Microsoft Word, LibreOffice, etc.).
+  > - **Alternative** : Convertissez-le en **PDF** ou **Markdown** pour une lecture directe sur GitHub.
+
+- **[Planning](https://canva.link/12wkb8e5b6src8n)**
+  > *Lien vers le planning détaillé du projet (Canva).*
