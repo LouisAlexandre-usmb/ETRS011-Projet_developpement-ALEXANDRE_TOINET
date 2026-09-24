@@ -134,9 +134,6 @@ Fonctionnalités pour déclarer, organiser et maintenir à jour la liste des éq
 #### **🔹 Moteur de collecte périodique (polling SNMP)**
 Module interrogeant automatiquement les équipements déclarés pour extraire leur état et leurs indicateurs.
 
-
-
-<custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Moteur%20de%20collecte%22%7D%7D" />
  | **Fonctionnalité** | **Description** |
  |--------------------|----------------|
  | **Interrogation périodique** | Selon un intervalle configurable (valeur par défaut pour tout le parc). |
@@ -151,9 +148,6 @@ Module interrogeant automatiquement les équipements déclarés pour extraire le
 #### **🔹 Tableau de bord global**
 Vue principale donnant un **état de santé global du parc** en un coup d'œil.
 
-
-
-<custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Tableau%20de%20bord%22%7D%7D" />
  | **Fonctionnalité** | **Description** |
  |--------------------|----------------|
  | **Liste/grille des équipements** | Chaque équipement est associé à un indicateur visuel de statut (opérationnel, dégradé, indisponible, en attente). |
@@ -166,9 +160,6 @@ Vue principale donnant un **état de santé global du parc** en un coup d'œil.
 #### **🔹 Fiche détaillée par équipement**
 Page rassemblant toutes les informations relatives à un équipement.
 
-
-
-<custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Fiche%20d%C3%A9taill%C3%A9e%22%7D%7D" />
  | **Fonctionnalité** | **Description** |
  |--------------------|----------------|
  | **Informations d'identité** | Nom, adresse IP, description, groupe, relations parent/enfant. |
@@ -181,9 +172,6 @@ Page rassemblant toutes les informations relatives à un équipement.
 #### **🔹 Alertes visuelles**
 Mise en évidence des situations nécessitant l'attention de l'utilisateur.
 
-
-
-<custom-element data-json="%7B%22type%22%3A%22table-metadata%22%2C%22attributes%22%3A%7B%22title%22%3A%22Alertes%20visuelles%22%7D%7D" />
  | **Fonctionnalité** | **Description** |
  |--------------------|----------------|
  | **Types d'anomalies** | Indisponibilité d'un équipement ou dépassement d'un seuil de performance (CPU, mémoire). |
