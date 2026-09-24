@@ -30,17 +30,13 @@ Dans le cadre de ce développement, il sera également demandé de :
 - **Expliquer les raisons** ayant conduit à retenir ou rejeter certaines propositions.
 - **Justifier certaines parties de code** retenues (choix algorithmiques, optimisations, etc.).
 
----
 
 ---
 
 ## **📌 Sommaire**
 
 ### **Documents clés**
-- **[Cahier des charges](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charge.docx)**
-  > *Note* : GitHub ne permet pas de visualiser directement les fichiers `.docx` dans l'interface web. Pour consulter ce document :
-  > - **Téléchargez-le** depuis le lien ci-dessus et ouvrez-le avec un logiciel compatible (Microsoft Word, LibreOffice, etc.).
-  > - **Alternative** : Convertissez-le en **PDF** ou **Markdown** pour une lecture directe sur GitHub.
+- **[Cahier des charges - fonctionnel](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charge.docx)**
+- **[Cahier des charges - technologique](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Specifications_techniques.docx)**
 
 - **[Planning](https://canva.link/12wkb8e5b6src8n)**
-  > *Lien vers le planning détaillé du projet (Canva).*
