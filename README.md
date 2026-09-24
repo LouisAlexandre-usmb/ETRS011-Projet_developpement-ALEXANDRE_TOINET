@@ -33,13 +33,10 @@ Le projet est actuellement en phase de **cadrage / conception** : le cahier des 
      - Mise à jour logicielle, etc.
 2. **Établir un cahier des charges détaillé** :
    - Définir les besoins, les fonctionnalités et les contraintes du projet.
-3. **Développement** :
-   a. **Établir une architecture précise et détaillée** :
-      - Modélisation du système.
-   b. **Réaliser et justifier les choix technologiques** :
-      - Sélection des outils, langages et frameworks.
-   c. **Établir un planning de travail** :
-      - Répartition des tâches et échéances.
+3. **Développement** : 
+   - a. **Établir une architecture précise et détaillée** : Modélisation du système.
+   - b. **Réaliser et justifier les choix technologiques** : Sélection des outils, langages et frameworks.
+   - c. **Établir un planning de travail** : Répartition des tâches et échéances.
 ### **Exigences supplémentaires**
 Dans le cadre de ce développement, il sera également demandé de :
 - Conserver une **trace des échanges avec l'IA** (ex: discussions, suggestions, décisions).
