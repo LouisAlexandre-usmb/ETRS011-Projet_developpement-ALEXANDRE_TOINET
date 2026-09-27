@@ -47,8 +47,8 @@ Dans le cadre de ce développement, il sera également demandé de :
 ## **📌 Sommaire**
 
 ### **Documents clés**
-- **[Cahier des charges - fonctionnel](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charge.docx)**
-- **[Cahier des charges - technologique](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Specifications_techniques.docx)**
+- **[Cahier des charges - fonctionnel](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charges.pdf)**
+- **[Cahier des charges - technologique](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Specifications%20techniques.pdf)**
 
 - **[Planning](https://canva.link/12wkb8e5b6src8n)**
 ---
