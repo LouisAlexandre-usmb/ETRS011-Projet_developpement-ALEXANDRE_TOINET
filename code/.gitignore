@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Base SQLite et données locales (elles vivent dans le volume Docker)
+data/
+*.db
+*.sqlite3
+
+# Secrets / configuration locale
+.env
+
+# Éditeurs et OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*

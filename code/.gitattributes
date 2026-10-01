@@ -1,0 +1,10 @@
+# Fins de ligne LF dans le dépôt, quel que soit l'OS (Windows / macOS / Linux).
+# Indispensable pour les fichiers lus dans les conteneurs Linux (scripts, snmpd.conf…).
+* text=auto eol=lf
+
+# Fichiers binaires : jamais de conversion
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.docx binary
+*.db   binary

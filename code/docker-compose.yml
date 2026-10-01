@@ -1,0 +1,29 @@
+# Environnement de développement
+#   Lancer      : docker compose up --build
+#   Ouvrir      : http://localhost:8080
+#   Arrêter     : Ctrl+C, puis docker compose down
+#   Tout effacer (y compris la base) : docker compose down -v
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8000"
+    volumes:
+      - ./app:/code/app          # le code local est monté : une modif = rechargement auto
+      - donnees:/code/data       # base SQLite persistante
+    environment:
+      SNMP_TARGET: snmp-agent    # nom du service ci-dessous (résolu par le DNS de Docker)
+      SNMP_COMMUNITY: public
+      DB_PATH: /code/data/supervision.db
+      WATCHFILES_FORCE_POLLING: "true"   # nécessaire pour détecter les modifs depuis Windows
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      - snmp-agent
+
+  # Faux équipement réseau : un agent SNMP v2c (Net-SNMP) pour tester sans matériel
+  snmp-agent:
+    build: ./snmp-agent
+
+volumes:
+  donnees:

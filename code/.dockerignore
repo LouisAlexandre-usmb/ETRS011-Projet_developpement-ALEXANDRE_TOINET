@@ -1,0 +1,11 @@
+.git
+.gitignore
+.gitattributes
+Documents
+data
+**/__pycache__
+**/*.pyc
+.venv
+venv
+.env
+*.md
