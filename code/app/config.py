@@ -14,4 +14,4 @@ SNMP_TIMEOUT = float(os.getenv("SNMP_TIMEOUT", "2"))   # secondes
 SNMP_RETRIES = int(os.getenv("SNMP_RETRIES", "1"))
 
 # Base SQLite (utilisée dans les prochaines étapes)
-DB_PATH = os.getenv("DB_PATH", "data/supervision.db")
+DB_PATH = os.getenv("DB_PATH", "donness/supervision.db")
