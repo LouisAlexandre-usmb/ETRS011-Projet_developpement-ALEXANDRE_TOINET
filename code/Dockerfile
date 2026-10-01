@@ -10,7 +10,7 @@ WORKDIR /code
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Code de l'application
+# Code de l'application ensuite : cette couche est rechargée à chaque modification du code
 COPY app ./app
 
 # Dossier de la base SQLite (monté sur un volume Docker)
