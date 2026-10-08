@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block titre %}Connexion · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <section class="carte connexion">
+    <h2>Connexion</h2>
+
+    {% if erreur %}
+      <p class="erreur" role="alert">{{ erreur }}</p>
+    {% endif %}
+
+    <form method="post" action="/login" class="formulaire">
+      <input type="hidden" name="suivant" value="{{ suivant }}">
+
+      <label for="login">Identifiant</label>
+      <input id="login" name="login" type="text" value="{{ login or '' }}"
+             autocomplete="username" required {% if not login %}autofocus{% endif %}>
+
+      <label for="mot_de_passe">Mot de passe</label>
+      <input id="mot_de_passe" name="mot_de_passe" type="password"
+             autocomplete="current-password" required {% if login %}autofocus{% endif %}>
+
+      <button type="submit" class="bouton">Se connecter</button>
+    </form>
+  </section>
+{% endblock %}

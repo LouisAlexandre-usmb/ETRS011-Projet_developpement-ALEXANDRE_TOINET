@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block titre %}Accès refusé · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <section class="carte">
+    <h2>Accès refusé</h2>
+    <p>Cette page est réservée aux administrateurs. Votre compte a le rôle
+       <strong>{{ utilisateur.role }}</strong>.</p>
+    <p><a href="/">Retour à l'accueil</a></p>
+  </section>
+{% endblock %}

@@ -64,3 +64,51 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .9em; }
 
 .pied { color: var(--sourdine); font-size: .85rem; text-align: center; margin-top: 1.5rem; }
 .pied a { color: var(--accent); }
+
+/* ---- session (en-tête) ---- */
+.session { margin-left: auto; display: flex; align-items: baseline; gap: .6rem; font-size: .9rem; }
+.session form { margin: 0; }
+.role {
+  font-size: .75rem;
+  font-weight: 600;
+  padding: .1rem .55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .15);
+}
+.role-admin { background: var(--alerte); }
+.bouton-lien {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #fff;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  opacity: .85;
+}
+.bouton-lien:hover { opacity: 1; }
+
+/* ---- page de connexion ---- */
+.connexion { max-width: 380px; margin: 3rem auto 0; }
+.connexion h2 { margin-top: 0; font-size: 1.15rem; }
+.formulaire { display: flex; flex-direction: column; gap: .4rem; }
+.formulaire label { font-size: .9rem; color: var(--sourdine); margin-top: .5rem; }
+.formulaire input {
+  font: inherit;
+  padding: .55rem .7rem;
+  border: 1px solid var(--trait);
+  border-radius: 6px;
+}
+.formulaire input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+.bouton {
+  margin-top: 1rem;
+  font: inherit;
+  font-weight: 600;
+  padding: .6rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.bouton:hover { filter: brightness(1.1); }

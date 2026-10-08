@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titre %}Supervision SNMP{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header class="entete">
+    <h1>Supervision SNMP</h1>
+    <span class="version">v0.1 · squelette</span>
+    {% if utilisateur %}
+      <div class="session">
+        <span>{{ utilisateur.login }}</span>
+        <span class="role role-{{ utilisateur.role }}">{{ utilisateur.role }}</span>
+        <form method="post" action="/logout">
+          <button type="submit" class="bouton-lien">Déconnexion</button>
+        </form>
+      </div>
+    {% endif %}
+  </header>
+
+  <main class="contenu">
+    {% block contenu %}{% endblock %}
+  </main>
+</body>
+</html>
