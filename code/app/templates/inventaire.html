@@ -5,18 +5,6 @@
 {% block contenu %}
   <section class="carte">
     <div class="carte-titre">
-      <h2>Créer un groupe</h2>
-    </div>
-    <form method="post" action="/groupes" class="formulaire formulaire-ligne">
-      <label>Nom du groupe
-        <input type="text" name="nom" required>
-      </label>
-      <button type="submit">Créer</button>
-    </form>
-  </section>
-
-  <section class="carte">
-    <div class="carte-titre">
       <h2>Ajouter un équipement</h2>
     </div>
     <form method="post" action="/equipements" class="formulaire">
@@ -44,6 +32,58 @@
     </form>
   </section>
 
+  {% if equipements %}
+    <datalist id="dl-equipements">
+      {% for e in equipements %}
+        <option value="{{ e.adresse }}">{{ e.nom }}</option>
+      {% endfor %}
+    </datalist>
+  {% endif %}
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Modifier un équipement</h2>
+    </div>
+    {% if equipements %}
+      <form method="get" action="/inventaire" class="formulaire formulaire-ligne">
+        <label>Nom ou adresse
+          <input type="text" name="modifier" list="dl-equipements"
+                 placeholder="ex. Switch-TP ou 192.168.140.141" required>
+        </label>
+        <button type="submit">Rechercher</button>
+      </form>
+
+      {% if equipement_a_modifier %}
+        <form method="post" action="/equipements/modifier" class="formulaire">
+          <input type="hidden" name="id_equipement" value="{{ equipement_a_modifier.id }}">
+          <label>Nom
+            <input type="text" name="nom" value="{{ equipement_a_modifier.nom }}" required>
+          </label>
+          <label>Adresse (IP ou nom DNS)
+            <input type="text" name="adresse" value="{{ equipement_a_modifier.adresse }}" required>
+          </label>
+          <label>Communauté SNMP
+            <input type="text" name="communaute_snmp" value="{{ equipement_a_modifier.communaute_snmp }}" required>
+          </label>
+          <label>Groupe (optionnel)
+            <select name="groupe_id">
+              <option value="">Aucun</option>
+              {% for g in groupes %}
+                <option value="{{ g.id }}" {{ 'selected' if g.id == equipement_a_modifier.groupe_id }}>{{ g.nom }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Description (optionnel)
+            <input type="text" name="description" value="{{ equipement_a_modifier.description or '' }}">
+          </label>
+          <button type="submit">Enregistrer les modifications</button>
+        </form>
+      {% endif %}
+    {% else %}
+      <p class="meta">Aucun équipement enregistré pour le moment.</p>
+    {% endif %}
+  </section>
+
   <section class="carte">
     <div class="carte-titre">
       <h2>Supprimer un équipement</h2>
@@ -51,17 +91,26 @@
     {% if equipements %}
       <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne"
             onsubmit="return confirm('Confirmer la suppression de cet équipement et de son historique ?')">
-        <label>Équipement
-          <select name="id_equipement" required>
-            {% for e in equipements %}
-              <option value="{{ e.id }}">{{ e.nom }} ({{ e.adresse }})</option>
-            {% endfor %}
-          </select>
+        <label>Nom ou adresse
+          <input type="text" name="recherche" list="dl-equipements"
+                 placeholder="ex. Switch-TP ou 192.168.140.141" required>
         </label>
         <button type="submit" class="bouton-danger">Supprimer</button>
       </form>
     {% else %}
       <p class="meta">Aucun équipement enregistré pour le moment.</p>
     {% endif %}
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Créer un groupe</h2>
+    </div>
+    <form method="post" action="/groupes" class="formulaire formulaire-ligne">
+      <label>Nom du groupe
+        <input type="text" name="nom" required>
+      </label>
+      <button type="submit">Créer</button>
+    </form>
   </section>
 {% endblock %}

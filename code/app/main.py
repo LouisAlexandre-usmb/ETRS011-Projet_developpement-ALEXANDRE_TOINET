@@ -65,10 +65,18 @@ async def tableau_de_bord(request: Request):
 @app.get("/inventaire", response_class=HTMLResponse)
 async def inventaire(request: Request):
     equipements = db.lister_equipements()
+    recherche_modif = request.query_params.get("modifier")
+    equipement_a_modifier = db.trouver_equipement(recherche_modif) if recherche_modif else None
+
+    erreur = request.query_params.get("erreur")
+    if recherche_modif and equipement_a_modifier is None and not erreur:
+        erreur = f"Aucun équipement (ou plusieurs) ne correspond à « {recherche_modif} »"
+
     return templates.TemplateResponse(request, "inventaire.html", {
         "equipements": equipements,
         "groupes": db.lister_groupes(),
-        "erreur": request.query_params.get("erreur"),
+        "equipement_a_modifier": equipement_a_modifier,
+        "erreur": erreur,
         "page_active": "inventaire",
     })
 
@@ -103,9 +111,50 @@ async def ajouter_equipement_html(
 
 
 @app.post("/equipements/supprimer")
-async def supprimer_equipement_html(id_equipement: int = Form(...)):
-    """Supprime un équipement depuis le formulaire de la page Inventaire."""
-    db.supprimer_equipement(id_equipement)
+async def supprimer_equipement_html(recherche: str = Form(...)):
+    """Supprime l'équipement trouvé par nom ou adresse depuis le formulaire de recherche."""
+    equipement = db.trouver_equipement(recherche)
+    if equipement is None:
+        message = f"Aucun équipement (ou plusieurs) ne correspond à « {recherche} »"
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+    db.supprimer_equipement(equipement["id"])
+    return RedirectResponse("/inventaire", status_code=303)
+
+
+@app.post("/equipements/modifier")
+async def modifier_equipement_html(
+    id_equipement: int = Form(...),
+    nom: str = Form(...),
+    adresse: str = Form(...),
+    communaute_snmp: str = Form(...),
+    description: str = Form(""),
+    groupe_id: str = Form(""),
+):
+    """Met à jour un équipement existant depuis le formulaire de la page Inventaire."""
+    equipement = db.obtenir_equipement(id_equipement)
+    if equipement is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+
+    description_systeme = equipement["description_systeme"]
+    if adresse != equipement["adresse"] or communaute_snmp != equipement["communaute_snmp"]:
+        try:
+            infos = await lire_infos_systeme(
+                adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
+            )
+        except SnmpError as exc:
+            return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
+        description_systeme = infos["sysDescr"]
+
+    try:
+        db.modifier_equipement(
+            id_equipement, nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
+            description=description or None, groupe_id=int(groupe_id) if groupe_id else None,
+            description_systeme=description_systeme,
+        )
+    except sqlite3.IntegrityError:
+        message = f"Un équipement existe déjà pour « {adresse} »"
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+
     return RedirectResponse("/inventaire", status_code=303)
 
 
