@@ -3,31 +3,40 @@
 {% block contenu %}
     <section class="carte">
       <div class="carte-titre">
-        <h2>Équipement de test</h2>
-        {% if infos %}
-          <span class="pastille ok">Joignable</span>
-        {% else %}
-          <span class="pastille ko">Injoignable</span>
-        {% endif %}
+        <h2>Équipements</h2>
+        <span class="meta">{{ equipements|length }} enregistré(s)</span>
       </div>
-      <p class="meta">Cible <code>{{ cible }}</code> · SNMP v2c · communauté <code>{{ communaute }}</code></p>
 
-      {% if infos %}
-        <dl class="infos">
-          <dt>sysName</dt>     <dd>{{ infos.sysName }}</dd>
-          <dt>sysDescr</dt>    <dd>{{ infos.sysDescr }}</dd>
-          <dt>sysUpTime</dt>   <dd>{{ infos.sysUpTime }}</dd>
-          <dt>sysLocation</dt> <dd>{{ infos.sysLocation }}</dd>
-          <dt>sysContact</dt>  <dd>{{ infos.sysContact }}</dd>
-        </dl>
+      {% if equipements %}
+        <table class="tableau">
+          <thead>
+            <tr><th>Nom</th><th>Adresse</th><th>Statut</th><th>Ajouté le</th></tr>
+          </thead>
+          <tbody>
+            {% for e in equipements %}
+              <tr>
+                <td>{{ e.nom }}</td>
+                <td><code>{{ e.adresse }}</code></td>
+                <td>
+                  <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'
+                                        else 'degrade' if e.statut == 'DEGRADE'
+                                        else 'ko' if e.statut == 'INDISPONIBLE'
+                                        else 'attente' }}">{{ e.statut }}</span>
+                </td>
+                <td>{{ e.date_ajout }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       {% else %}
-        <p class="erreur">{{ erreur }}</p>
+        <p class="meta">Aucun équipement enregistré pour le moment. Utiliser
+          <a href="/docs#/default/creer_equipement_api_api_equipements_post">POST /api/equipements</a>
+          pour en ajouter un (le formulaire HTML arrive dans une prochaine séance).</p>
       {% endif %}
     </section>
 
     <p class="pied">
-      Rafraîchir la page relance une requête SNMP ·
-      API : <a href="/api/equipement-test">/api/equipement-test</a> ·
+      Démo SNMP sans base : <a href="/api/equipement-test">/api/equipement-test</a> ·
       Documentation : <a href="/docs">/docs</a>
     </p>
 {% endblock %}

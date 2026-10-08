@@ -49,6 +49,7 @@ Dans le cadre de ce développement, il sera également demandé de :
 ### **Documents clés**
 - **[Cahier des charges - fonctionnel](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charges.pdf)**
 - **[Cahier des charges - technologique](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Specifications%20techniques.pdf)**
+- **[SLIDE - Visualisation Globale](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/3bf597d66aadaf42a046e3a4b6a27f496faeed67/Documents/Slide%20powerpoint%20-%20Explications%20mi-parcours.pptx)**
 
 - **[Planning](https://canva.link/12wkb8e5b6src8n)**
 ---
