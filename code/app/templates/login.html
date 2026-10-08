@@ -5,8 +5,8 @@
   <section class="carte connexion">
     <h2>Connexion</h2>
 
-    {% if erreur %}
-      <p class="erreur" role="alert">{{ erreur }}</p>
+    {% if erreur_connexion %}
+      <p class="erreur" role="alert">{{ erreur_connexion }}</p>
     {% endif %}
 
     <form method="post" action="/login" class="formulaire">

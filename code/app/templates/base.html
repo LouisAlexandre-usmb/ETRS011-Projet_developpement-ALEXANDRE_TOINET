@@ -9,6 +9,14 @@
 <body>
   <header class="entete">
     <h1>Supervision SNMP</h1>
+    {% if utilisateur %}
+      <nav class="navigation">
+        <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
+        {% if utilisateur.est_admin %}
+          <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
+        {% endif %}
+      </nav>
+    {% endif %}
     <span class="version">v0.1 · squelette</span>
     {% if utilisateur %}
       <div class="session">
@@ -22,7 +30,18 @@
   </header>
 
   <main class="contenu">
+    {% if erreur %}
+      <p class="bandeau-erreur">{{ erreur }}</p>
+    {% endif %}
+
     {% block contenu %}{% endblock %}
+
+    {% if utilisateur %}
+      <p class="pied">
+        Démo SNMP sans base : <a href="/api/equipement-test">/api/equipement-test</a> ·
+        Documentation : <a href="/docs">/docs</a>
+      </p>
+    {% endif %}
   </main>
 </body>
 </html>

@@ -94,7 +94,7 @@ async def connexion(
 
     attente = secondes_avant_deblocage(cle)
     if attente:
-        contexte["erreur"] = f"Trop de tentatives. Réessayez dans {attente} s."
+        contexte["erreur_connexion"] = f"Trop de tentatives. Réessayez dans {attente} s."
         return templates.TemplateResponse(request, "login.html", contexte, status_code=429)
 
     utilisateur = trouver_utilisateur(login)
@@ -104,7 +104,7 @@ async def connexion(
     if utilisateur is None or not mot_de_passe_ok:
         noter_echec(cle)
         # Message volontairement vague : on ne dit pas si c'est le login ou le mot de passe
-        contexte["erreur"] = "Identifiant ou mot de passe incorrect."
+        contexte["erreur_connexion"] = "Identifiant ou mot de passe incorrect."
         return templates.TemplateResponse(request, "login.html", contexte, status_code=401)
 
     effacer_echecs(cle)
