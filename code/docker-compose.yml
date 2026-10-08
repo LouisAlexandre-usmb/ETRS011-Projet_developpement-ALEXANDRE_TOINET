@@ -11,7 +11,7 @@ services:
       - "8080:8000"
     volumes:
       - ./app:/code/app          # le code local est monté : une modif = rechargement auto
-      - donnees:/code/data       # base SQLite persistante
+      - ./data:/code/data       # base SQLite persistante
     environment:
       SNMP_TARGET: snmp-agent    # nom du service ci-dessous (résolu par le DNS de Docker)
       SNMP_COMMUNITY: public
@@ -28,6 +28,3 @@ services:
   # Faux équipement réseau : un agent SNMP v2c (Net-SNMP) pour tester sans matériel
   snmp-agent:
     build: ./snmp-agent
-
-volumes:
-  donnees:
