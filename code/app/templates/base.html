@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titre %}Supervision SNMP{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header class="entete">
+    <h1>Supervision SNMP</h1>
+    <nav class="navigation">
+      <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
+      <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
+    </nav>
+    <span class="version">v0.1 · squelette</span>
+  </header>
+
+  <main class="contenu">
+    {% if erreur %}
+      <p class="bandeau-erreur">{{ erreur }}</p>
+    {% endif %}
+
+    {% block contenu %}{% endblock %}
+
+    <p class="pied">
+      Démo SNMP sans base : <a href="/api/equipement-test">/api/equipement-test</a> ·
+      Documentation : <a href="/docs">/docs</a>
+    </p>
+  </main>
+</body>
+</html>

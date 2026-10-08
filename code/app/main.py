@@ -6,9 +6,10 @@
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -36,6 +37,7 @@ class NouvelEquipement(BaseModel):
     adresse: str
     communaute_snmp: str = "public"
     description: str | None = None
+    groupe_id: int | None = None
 
 
 async def _interroger_cible() -> tuple[dict | None, str | None]:
@@ -52,11 +54,70 @@ async def _interroger_cible() -> tuple[dict | None, str | None]:
 
 # ---------------------------------------------------------------- pages HTML
 @app.get("/", response_class=HTMLResponse)
-async def accueil(request: Request):
+async def tableau_de_bord(request: Request):
     equipements = db.lister_equipements()
     return templates.TemplateResponse(request, "index.html", {
         "equipements": equipements,
+        "page_active": "tableau_de_bord",
     })
+
+
+@app.get("/inventaire", response_class=HTMLResponse)
+async def inventaire(request: Request):
+    equipements = db.lister_equipements()
+    return templates.TemplateResponse(request, "inventaire.html", {
+        "equipements": equipements,
+        "groupes": db.lister_groupes(),
+        "erreur": request.query_params.get("erreur"),
+        "page_active": "inventaire",
+    })
+
+
+@app.post("/equipements")
+async def ajouter_equipement_html(
+    nom: str = Form(...),
+    adresse: str = Form(...),
+    communaute_snmp: str = Form("public"),
+    description: str = Form(""),
+    groupe_id: str = Form(""),
+):
+    """Ajoute un équipement depuis le formulaire de la page Inventaire."""
+    try:
+        infos = await lire_infos_systeme(
+            adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
+        )
+    except SnmpError as exc:
+        return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
+
+    try:
+        db.creer_equipement(
+            nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
+            description=description or None, description_systeme=infos["sysDescr"],
+            groupe_id=int(groupe_id) if groupe_id else None,
+        )
+    except sqlite3.IntegrityError:
+        message = f"Un équipement existe déjà pour « {adresse} »"
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+
+    return RedirectResponse("/inventaire", status_code=303)
+
+
+@app.post("/equipements/supprimer")
+async def supprimer_equipement_html(id_equipement: int = Form(...)):
+    """Supprime un équipement depuis le formulaire de la page Inventaire."""
+    db.supprimer_equipement(id_equipement)
+    return RedirectResponse("/inventaire", status_code=303)
+
+
+@app.post("/groupes")
+async def creer_groupe_html(nom: str = Form(...)):
+    """Crée un groupe depuis le formulaire de la page Inventaire."""
+    try:
+        db.creer_groupe(nom)
+    except sqlite3.IntegrityError:
+        message = f"Le groupe « {nom} » existe déjà"
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+    return RedirectResponse("/inventaire", status_code=303)
 
 
 # ---------------------------------------------------------------- API JSON
@@ -96,6 +157,7 @@ async def creer_equipement_api(payload: NouvelEquipement):
         id_equipement = db.creer_equipement(
             nom=payload.nom, adresse=payload.adresse, communaute_snmp=payload.communaute_snmp,
             description=payload.description, description_systeme=infos["sysDescr"],
+            groupe_id=payload.groupe_id,
         )
     except sqlite3.IntegrityError:
         return JSONResponse(

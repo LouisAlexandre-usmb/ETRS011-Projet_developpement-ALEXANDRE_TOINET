@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block titre %}Gestion de l'inventaire · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Créer un groupe</h2>
+    </div>
+    <form method="post" action="/groupes" class="formulaire formulaire-ligne">
+      <label>Nom du groupe
+        <input type="text" name="nom" required>
+      </label>
+      <button type="submit">Créer</button>
+    </form>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Ajouter un équipement</h2>
+    </div>
+    <form method="post" action="/equipements" class="formulaire">
+      <label>Nom
+        <input type="text" name="nom" required>
+      </label>
+      <label>Adresse (IP ou nom DNS)
+        <input type="text" name="adresse" required>
+      </label>
+      <label>Communauté SNMP
+        <input type="text" name="communaute_snmp" value="public" required>
+      </label>
+      <label>Groupe (optionnel)
+        <select name="groupe_id">
+          <option value="">Aucun</option>
+          {% for g in groupes %}
+            <option value="{{ g.id }}">{{ g.nom }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Description (optionnel)
+        <input type="text" name="description">
+      </label>
+      <button type="submit">Ajouter</button>
+    </form>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Supprimer un équipement</h2>
+    </div>
+    {% if equipements %}
+      <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne"
+            onsubmit="return confirm('Confirmer la suppression de cet équipement et de son historique ?')">
+        <label>Équipement
+          <select name="id_equipement" required>
+            {% for e in equipements %}
+              <option value="{{ e.id }}">{{ e.nom }} ({{ e.adresse }})</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="bouton-danger">Supprimer</button>
+      </form>
+    {% else %}
+      <p class="meta">Aucun équipement enregistré pour le moment.</p>
+    {% endif %}
+  </section>
+{% endblock %}

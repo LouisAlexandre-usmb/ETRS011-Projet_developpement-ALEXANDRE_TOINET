@@ -1,31 +1,46 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Supervision SNMP</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
-</head>
-<body>
-  <header class="entete">
-    <h1>Supervision SNMP</h1>
-    <span class="version">v0.1 · squelette</span>
-  </header>
+{% extends "base.html" %}
 
-  <main class="contenu">
-    <section class="carte">
-      <div class="carte-titre">
-        <h2>Équipements</h2>
-        <span class="meta">{{ equipements|length }} enregistré(s)</span>
+{% block titre %}Tableau de bord · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Tableau de bord</h2>
+      <span class="meta">{{ equipements|length }} équipement(s)</span>
+    </div>
+
+    <div class="compteurs">
+      <div class="compteur">
+        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'OPERATIONNEL')|list|length }}</span>
+        <span class="libelle">Opérationnels</span>
       </div>
+      <div class="compteur">
+        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'DEGRADE')|list|length }}</span>
+        <span class="libelle">Dégradés</span>
+      </div>
+      <div class="compteur">
+        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'INDISPONIBLE')|list|length }}</span>
+        <span class="libelle">Indisponibles</span>
+      </div>
+      <div class="compteur">
+        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length }}</span>
+        <span class="libelle">En attente</span>
+      </div>
+    </div>
 
-      {% if equipements %}
+    {% if equipements %}
+      {% for groupe_nom, equips in equipements|groupby('groupe_nom') %}
+        {% if groupe_nom == '~' %}
+          <p class="sous-titre sans-groupe">Équipements non groupés</p>
+        {% else %}
+          <h3 class="sous-titre">{{ groupe_nom }}</h3>
+        {% endif %}
         <table class="tableau">
           <thead>
             <tr><th>Nom</th><th>Adresse</th><th>Statut</th><th>Ajouté le</th></tr>
           </thead>
           <tbody>
-            {% for e in equipements %}
+            {% for e in equips %}
               <tr>
                 <td>{{ e.nom }}</td>
                 <td><code>{{ e.adresse }}</code></td>
@@ -40,17 +55,10 @@
             {% endfor %}
           </tbody>
         </table>
-      {% else %}
-        <p class="meta">Aucun équipement enregistré pour le moment. Utiliser
-          <a href="/docs#/default/creer_equipement_api_api_equipements_post">POST /api/equipements</a>
-          pour en ajouter un (le formulaire HTML arrive dans une prochaine séance).</p>
-      {% endif %}
-    </section>
-
-    <p class="pied">
-      Démo SNMP sans base : <a href="/api/equipement-test">/api/equipement-test</a> ·
-      Documentation : <a href="/docs">/docs</a>
-    </p>
-  </main>
-</body>
-</html>
+      {% endfor %}
+    {% else %}
+      <p class="meta">Aucun équipement enregistré. Ajoutez-en depuis la page
+        <a href="/inventaire">Gestion de l'inventaire</a>.</p>
+    {% endif %}
+  </section>
+{% endblock %}

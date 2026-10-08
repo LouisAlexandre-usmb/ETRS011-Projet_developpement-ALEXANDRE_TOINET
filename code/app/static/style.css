@@ -19,22 +19,44 @@ body {
 
 .entete {
   display: flex;
-  align-items: baseline;
-  gap: 1rem;
+  align-items: center;
+  gap: 1.5rem;
   padding: 1rem 2rem;
   background: var(--encre);
   color: #fff;
 }
 .entete h1 { margin: 0; font-size: 1.3rem; }
-.version { opacity: .7; font-size: .85rem; }
+.version { opacity: .7; font-size: .85rem; margin-left: auto; }
+
+.navigation { display: flex; gap: 1.25rem; }
+.navigation a {
+  color: rgba(255, 255, 255, .7);
+  text-decoration: none;
+  font-size: .9rem;
+  font-weight: 600;
+  padding-bottom: .2rem;
+  border-bottom: 2px solid transparent;
+}
+.navigation a:hover { color: #fff; }
+.navigation a.actif { color: #fff; border-bottom-color: var(--accent); }
 
 .contenu { max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+
+.bandeau-erreur {
+  background: #F6E3D6;
+  color: var(--alerte);
+  font-weight: 600;
+  border-radius: 8px;
+  padding: .75rem 1rem;
+  margin-bottom: 1.25rem;
+}
 
 .carte {
   background: var(--carte);
   border: 1px solid var(--trait);
   border-radius: 10px;
   padding: 1.5rem 1.75rem;
+  margin-bottom: 1.5rem;
 }
 .carte-titre { display: flex; align-items: center; justify-content: space-between; }
 .carte-titre h2 { margin: 0; font-size: 1.15rem; }
@@ -51,9 +73,90 @@ body {
 .pastille.degrade { background: #FBEFD9; color: #8A5A00; }
 .pastille.attente { background: #EDEBE4; color: var(--sourdine); }
 
+.sous-titre {
+  margin: 1.5rem 0 0;
+  font-size: .95rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.sous-titre.sans-groupe {
+  font-weight: 500;
+  font-style: italic;
+  color: var(--sourdine);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.compteurs { display: flex; gap: 2rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.compteur { display: flex; flex-direction: column; gap: .15rem; }
+.compteur .valeur { font-size: 1.6rem; font-weight: 700; }
+.compteur .libelle { font-size: .8rem; color: var(--sourdine); }
+
 .tableau { width: 100%; border-collapse: collapse; margin-top: 1.25rem; font-size: .9rem; }
 .tableau th { text-align: left; color: var(--sourdine); font-weight: 600; padding: .4rem .6rem; }
 .tableau td { padding: .5rem .6rem; border-top: 1px solid var(--trait); }
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: .55rem 1.1rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { opacity: .9; }
+
+.bouton-danger { background: var(--alerte); }
+
+.carte > summary {
+  cursor: pointer;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--encre);
+}
+.carte > summary::marker { color: var(--accent); }
+
+.formulaire {
+  display: grid;
+  gap: 1rem;
+  max-width: 420px;
+  margin-top: 1.25rem;
+}
+.formulaire label {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  font-size: .85rem;
+  color: var(--sourdine);
+}
+.formulaire input {
+  border: 1px solid var(--trait);
+  border-radius: 6px;
+  padding: .55rem .7rem;
+  font: inherit;
+  color: var(--encre);
+}
+.formulaire button { justify-self: start; }
+
+.formulaire-ligne {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  max-width: none;
+}
+.formulaire-ligne label { flex: 1; }
+.formulaire-ligne select {
+  width: 100%;
+  border: 1px solid var(--trait);
+  border-radius: 6px;
+  padding: .55rem .7rem;
+  font: inherit;
+  color: var(--encre);
+}
 
 .infos {
   display: grid;

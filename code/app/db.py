@@ -64,22 +64,51 @@ def _seed(connexion: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------- équipements
 
 def lister_equipements() -> list[sqlite3.Row]:
-    """Renvoie tous les équipements, triés par nom."""
+    """Renvoie tous les équipements (avec le nom de leur groupe), triés par groupe (alphabétique,
+    les équipements sans groupe en dernier) puis par nom."""
     with get_connection() as connexion:
-        return connexion.execute("SELECT * FROM equipement ORDER BY nom").fetchall()
+        return connexion.execute(
+            # "~" ne sert qu'au tri : il vient après toutes les lettres, donc les équipements
+            # sans groupe se retrouvent toujours en dernier plutôt que mélangés par ordre alphabétique.
+            "SELECT equipement.*, COALESCE(groupe.nom, '~') AS groupe_nom "
+            "FROM equipement LEFT JOIN groupe ON groupe.id = equipement.groupe_id "
+            "ORDER BY groupe_nom, equipement.nom"
+        ).fetchall()
 
 
 def creer_equipement(nom: str, adresse: str, communaute_snmp: str,
                       description: str | None = None,
                       description_systeme: str | None = None,
-                      modele_supervision_id: int = 1) -> int:
+                      modele_supervision_id: int = 1,
+                      groupe_id: int | None = None) -> int:
     """Insère un équipement (statut initial EN_ATTENTE) et renvoie son id."""
     with get_connection() as connexion:
         curseur = connexion.execute(
             "INSERT INTO equipement "
             "(nom, adresse, communaute_snmp, description, description_systeme, "
-            " modele_supervision_id) VALUES (?, ?, ?, ?, ?, ?)",
+            " modele_supervision_id, groupe_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (nom, adresse, communaute_snmp, description, description_systeme,
-             modele_supervision_id),
+             modele_supervision_id, groupe_id),
         )
+        return curseur.lastrowid
+
+
+def supprimer_equipement(id_equipement: int) -> None:
+    """Supprime un équipement et tout son historique (clés étrangères en cascade)."""
+    with get_connection() as connexion:
+        connexion.execute("DELETE FROM equipement WHERE id = ?", (id_equipement,))
+
+
+# ---------------------------------------------------------------- groupes
+
+def lister_groupes() -> list[sqlite3.Row]:
+    """Renvoie tous les groupes, triés par nom."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM groupe ORDER BY nom").fetchall()
+
+
+def creer_groupe(nom: str) -> int:
+    """Insère un groupe et renvoie son id."""
+    with get_connection() as connexion:
+        curseur = connexion.execute("INSERT INTO groupe (nom) VALUES (?)", (nom,))
         return curseur.lastrowid
