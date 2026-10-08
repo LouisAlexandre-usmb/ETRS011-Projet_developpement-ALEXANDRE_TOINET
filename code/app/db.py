@@ -99,6 +99,43 @@ def supprimer_equipement(id_equipement: int) -> None:
         connexion.execute("DELETE FROM equipement WHERE id = ?", (id_equipement,))
 
 
+def obtenir_equipement(id_equipement: int) -> sqlite3.Row | None:
+    """Renvoie un équipement par son id, ou None s'il n'existe pas."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM equipement WHERE id = ?", (id_equipement,)
+        ).fetchone()
+
+
+def trouver_equipement(recherche: str) -> sqlite3.Row | None:
+    """Trouve un équipement par nom ou adresse exacte, sinon par correspondance partielle
+    si elle désigne un seul équipement sans ambiguïté. Renvoie None si rien ou plusieurs."""
+    with get_connection() as connexion:
+        ligne = connexion.execute(
+            "SELECT * FROM equipement WHERE nom = ? OR adresse = ?", (recherche, recherche)
+        ).fetchone()
+        if ligne:
+            return ligne
+        resultats = connexion.execute(
+            "SELECT * FROM equipement WHERE nom LIKE ? OR adresse LIKE ?",
+            (f"%{recherche}%", f"%{recherche}%"),
+        ).fetchall()
+        return resultats[0] if len(resultats) == 1 else None
+
+
+def modifier_equipement(id_equipement: int, nom: str, adresse: str, communaute_snmp: str,
+                         description: str | None, groupe_id: int | None,
+                         description_systeme: str | None) -> None:
+    """Met à jour les informations d'un équipement existant."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET nom = ?, adresse = ?, communaute_snmp = ?, description = ?, "
+            "groupe_id = ?, description_systeme = ? WHERE id = ?",
+            (nom, adresse, communaute_snmp, description, groupe_id, description_systeme,
+             id_equipement),
+        )
+
+
 # ---------------------------------------------------------------- groupes
 
 def lister_groupes() -> list[sqlite3.Row]:

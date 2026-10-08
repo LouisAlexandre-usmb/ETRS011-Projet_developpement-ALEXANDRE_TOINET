@@ -134,6 +134,7 @@ button:hover { opacity: .9; }
   color: var(--sourdine);
 }
 .formulaire input {
+  width: 100%;
   border: 1px solid var(--trait);
   border-radius: 6px;
   padding: .55rem .7rem;
