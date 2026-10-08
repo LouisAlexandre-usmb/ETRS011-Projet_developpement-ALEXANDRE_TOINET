@@ -48,6 +48,12 @@ body {
 }
 .pastille.ok { background: #DDF0EE; color: var(--accent); }
 .pastille.ko { background: #F6E3D6; color: var(--alerte); }
+.pastille.degrade { background: #FBEFD9; color: #8A5A00; }
+.pastille.attente { background: #EDEBE4; color: var(--sourdine); }
+
+.tableau { width: 100%; border-collapse: collapse; margin-top: 1.25rem; font-size: .9rem; }
+.tableau th { text-align: left; color: var(--sourdine); font-weight: 600; padding: .4rem .6rem; }
+.tableau td { padding: .5rem .6rem; border-top: 1px solid var(--trait); }
 
 .infos {
   display: grid;
