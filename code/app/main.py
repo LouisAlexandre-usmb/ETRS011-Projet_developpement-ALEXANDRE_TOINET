@@ -3,6 +3,7 @@
 - Pages HTML (Jinja2)  : /, /login
 - API JSON             : /api/...
 """
+import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,18 +17,23 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, config, db
+from app import auth, collecte, config, db
 from app.auth import AccesRefuse, NonConnecte, exiger_admin, utilisateur_courant
 from app.snmp_client import SnmpError, lire_infos_systeme
 from app.utilisateurs import Utilisateur
 
 BASE_DIR = Path(__file__).resolve().parent
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
+logging.getLogger("apscheduler").setLevel(logging.WARNING)  # sinon une ligne toutes les 5 s
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    collecte.demarrer()
     yield
+    collecte.arreter()
 
 
 app = FastAPI(title="Supervision SNMP", version="0.1.0", lifespan=lifespan)

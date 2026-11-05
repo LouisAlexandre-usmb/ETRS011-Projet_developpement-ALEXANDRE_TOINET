@@ -145,6 +145,41 @@ def modifier_equipement(id_equipement: int, nom: str, adresse: str, communaute_s
         )
 
 
+# ---------------------------------------------------------------- collecte
+
+def lire_parametres() -> sqlite3.Row:
+    """Renvoie les réglages globaux (ligne unique créée au démarrage)."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM parametres_generaux WHERE id = 1").fetchone()
+
+
+def lister_equipements_actifs() -> list[sqlite3.Row]:
+    """Renvoie les équipements à inclure dans le cycle de collecte."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM equipement WHERE actif = 1").fetchall()
+
+
+def noter_collecte_reussie(id_equipement: int) -> None:
+    """L'équipement a répondu : il est opérationnel et son compteur d'échecs repart de zéro."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET statut = 'OPERATIONNEL', nb_echecs_consecutifs = 0, "
+            "derniere_collecte = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE id = ?",
+            (id_equipement,),
+        )
+
+
+def noter_collecte_echouee(id_equipement: int, seuil_indisponibilite: int) -> None:
+    """Compte un échec ; le statut ne passe INDISPONIBLE qu'une fois le seuil atteint."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET nb_echecs_consecutifs = nb_echecs_consecutifs + 1, "
+            "statut = CASE WHEN nb_echecs_consecutifs + 1 >= ? THEN 'INDISPONIBLE' ELSE statut END "
+            "WHERE id = ?",
+            (seuil_indisponibilite, id_equipement),
+        )
+
+
 # ---------------------------------------------------------------- groupes
 
 def lister_groupes() -> list[sqlite3.Row]:

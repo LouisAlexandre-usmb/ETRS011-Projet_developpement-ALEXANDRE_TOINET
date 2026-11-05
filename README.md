@@ -21,9 +21,9 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 Le projet est **en cours de développement**.
 
-- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP, groupes, tableau de bord simple, connexion avec les rôles `admin` et `lecteur`.
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP, groupes, tableau de bord simple, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut des équipements (opérationnel ou indisponible).
 - **Préparé en base, sans interface** : relation parent-enfant, intervalle de collecte, paramètres généraux.
-- **À réaliser** : collecte périodique et historique des mesures, statut réel des équipements, alertes et seuils, fiche équipement et graphiques, recherche et filtres, rafraîchissement automatique, corrélation d'alertes, découverte de la topologie.
+- **À réaliser** : collecte et historique des mesures (CPU, mémoire, trafic), statut dégradé, alertes et seuils, fiche équipement et graphiques, recherche et filtres, rafraîchissement automatique, corrélation d'alertes, découverte de la topologie.
 
 ### Lancer le projet
 
