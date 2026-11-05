@@ -19,7 +19,29 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 ## 🚧 Statut du projet
  
-Le projet est actuellement en phase de **cadrage / conception** : le cahier des charges fonctionnel et les spécifications techniques sont rédigés, le développement n'a pas encore démarré. Les instructions d'installation et de lancement (`docker compose up`, etc.) seront ajoutées ici dès que le socle applicatif existera.
+Le projet est **en cours de développement**.
+
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP, groupes, tableau de bord simple, connexion avec les rôles `admin` et `lecteur`.
+- **Préparé en base, sans interface** : relation parent-enfant, intervalle de collecte, paramètres généraux.
+- **À réaliser** : collecte périodique et historique des mesures, statut réel des équipements, alertes et seuils, fiche équipement et graphiques, recherche et filtres, rafraîchissement automatique, corrélation d'alertes, découverte de la topologie.
+
+### Lancer le projet
+
+Depuis le dossier `code/`, avec Docker :
+
+```bash
+docker compose up --build
+```
+
+L'application est disponible sur http://localhost:8080. Les comptes de développement sont `admin` / `admin` et `lecteur` / `lecteur` : ces valeurs, définies dans `docker-compose.yml`, sont à changer hors de vos postes.
+
+### Écarts avec les documents de conception
+
+Le code a évolué depuis la rédaction des documents du dossier `Documents/`. En cas de différence, c'est cette section qui fait foi :
+
+- **Authentification** : le cahier des charges, les spécifications (section 7) et le diagramme de cas d'utilisation décrivent une version initiale sans authentification. L'application comporte en réalité un écran de connexion et deux rôles.
+- **Conteneurs** : les spécifications prévoient un conteneur unique. `docker-compose.yml` en lance un second, un agent SNMP de test qui simule un équipement réseau pendant le développement.
+- **Schéma des tables** : la section 6.2 des spécifications reste à compléter. Le schéma actuel se trouve dans [`code/app/schema.sql`](code/app/schema.sql).
  
 ---
  

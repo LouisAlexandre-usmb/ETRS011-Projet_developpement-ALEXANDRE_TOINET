@@ -2,13 +2,14 @@
 #   Lancer      : docker compose up --build
 #   Ouvrir      : http://localhost:8080
 #   Arrêter     : Ctrl+C, puis docker compose down
-#   Tout effacer (y compris la base) : docker compose down -v
+#   Base SQLite : data/supervision.db (dossier local, conservé par docker compose down)
+#   Repartir d'une base vide : arrêter, puis supprimer data/supervision.db
 
 services:
   app:
     build: .
     ports:
-      - "8080:8000"
+      - "127.0.0.1:8080:8000"    # accessible depuis ce poste uniquement (cf. spécifications, section 9)
     volumes:
       - ./app:/code/app          # le code local est monté : une modif = rechargement auto
       - ./data:/code/data       # base SQLite persistante

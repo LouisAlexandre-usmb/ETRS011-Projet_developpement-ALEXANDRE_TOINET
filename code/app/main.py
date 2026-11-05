@@ -134,10 +134,10 @@ async def ajouter_equipement_html(
 
 @app.post("/equipements/supprimer")
 async def supprimer_equipement_html(admin: Admin, recherche: str = Form(...)):
-    """Supprime l'équipement trouvé par nom ou adresse depuis le formulaire de recherche."""
-    equipement = db.trouver_equipement(recherche)
+    """Supprime l'équipement désigné par son nom ou son adresse exacts."""
+    equipement = db.trouver_equipement(recherche, exact=True)
     if equipement is None:
-        message = f"Aucun équipement (ou plusieurs) ne correspond à « {recherche} »"
+        message = f"Aucun équipement (ou plusieurs) ne porte exactement le nom ou l'adresse « {recherche} »"
         return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
     db.supprimer_equipement(equipement["id"])
     return RedirectResponse("/inventaire", status_code=303)
@@ -210,8 +210,11 @@ async def equipement_test(utilisateur: Connecte):
 
 @app.get("/api/equipements")
 async def lister_equipements_api(utilisateur: Connecte):
-    """Liste des équipements enregistrés."""
-    return [dict(ligne) for ligne in db.lister_equipements()]
+    """Liste des équipements enregistrés (sans la communauté SNMP, qui sert de mot de passe)."""
+    return [
+        {cle: ligne[cle] for cle in ligne.keys() if cle != "communaute_snmp"}
+        for ligne in db.lister_equipements()
+    ]
 
 
 @app.post("/api/equipements", status_code=201)

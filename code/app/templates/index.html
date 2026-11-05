@@ -57,8 +57,11 @@
         </table>
       {% endfor %}
     {% else %}
-      <p class="meta">Aucun équipement enregistré. Ajoutez-en depuis la page
-        <a href="/inventaire">Gestion de l'inventaire</a>.</p>
+      <p class="meta">Aucun équipement enregistré.
+        {% if utilisateur.est_admin %}
+          Ajoutez-en depuis la page <a href="/inventaire">Gestion de l'inventaire</a>.
+        {% endif %}
+      </p>
     {% endif %}
   </section>
 {% endblock %}

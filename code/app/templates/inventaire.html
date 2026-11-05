@@ -90,8 +90,8 @@
     </div>
     {% if equipements %}
       <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne"
-            onsubmit="return confirm('Confirmer la suppression de cet équipement et de son historique ?')">
-        <label>Nom ou adresse
+            onsubmit="return confirm('Supprimer « ' + this.recherche.value + ' » et tout son historique ?')">
+        <label>Nom ou adresse exacts
           <input type="text" name="recherche" list="dl-equipements"
                  placeholder="ex. Switch-TP ou 192.168.140.141" required>
         </label>

@@ -5,6 +5,8 @@ connexion et la referme ; pour le volume de ce projet, c'est plus simple à suiv
 de connexions partagées.
 """
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from app import config
@@ -12,13 +14,19 @@ from app import config
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
-def get_connection() -> sqlite3.Connection:
-    """Ouvre une connexion à la base, avec les clés étrangères activées."""
+@contextmanager
+def get_connection() -> Iterator[sqlite3.Connection]:
+    """Ouvre une connexion (clés étrangères activées), valide ou annule la transaction, puis
+    la referme : `with sqlite3.connect(...)` seul gère la transaction mais ne ferme rien."""
     Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     connexion = sqlite3.connect(config.DB_PATH)
-    connexion.execute("PRAGMA foreign_keys = ON")
-    connexion.row_factory = sqlite3.Row
-    return connexion
+    try:
+        connexion.execute("PRAGMA foreign_keys = ON")
+        connexion.row_factory = sqlite3.Row
+        with connexion:
+            yield connexion
+    finally:
+        connexion.close()
 
 
 def init_db() -> None:
@@ -107,19 +115,20 @@ def obtenir_equipement(id_equipement: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def trouver_equipement(recherche: str) -> sqlite3.Row | None:
-    """Trouve un équipement par nom ou adresse exacte, sinon par correspondance partielle
-    si elle désigne un seul équipement sans ambiguïté. Renvoie None si rien ou plusieurs."""
+def trouver_equipement(recherche: str, exact: bool = False) -> sqlite3.Row | None:
+    """Trouve un équipement par nom ou adresse exacte, sinon (sauf si `exact`) par correspondance
+    partielle. Renvoie None si rien ne correspond ou si plusieurs équipements correspondent."""
     with get_connection() as connexion:
-        ligne = connexion.execute(
-            "SELECT * FROM equipement WHERE nom = ? OR adresse = ?", (recherche, recherche)
-        ).fetchone()
-        if ligne:
-            return ligne
         resultats = connexion.execute(
-            "SELECT * FROM equipement WHERE nom LIKE ? OR adresse LIKE ?",
-            (f"%{recherche}%", f"%{recherche}%"),
+            "SELECT * FROM equipement WHERE nom = ? OR adresse = ?", (recherche, recherche)
         ).fetchall()
+        if not resultats and not exact:
+            # % et _ sont des jokers pour LIKE : on les échappe pour les chercher tels quels
+            motif = recherche.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            resultats = connexion.execute(
+                "SELECT * FROM equipement WHERE nom LIKE ? ESCAPE '\\' OR adresse LIKE ? ESCAPE '\\'",
+                (f"%{motif}%", f"%{motif}%"),
+            ).fetchall()
         return resultats[0] if len(resultats) == 1 else None
 
 

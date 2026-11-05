@@ -14,8 +14,8 @@ SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
 SNMP_TIMEOUT = float(os.getenv("SNMP_TIMEOUT", "2"))   # secondes
 SNMP_RETRIES = int(os.getenv("SNMP_RETRIES", "1"))
 
-# Base SQLite (utilisée dans les prochaines étapes)
-DB_PATH = os.getenv("DB_PATH", "donnees/supervision.db")
+# Base SQLite (dans Docker : /code/data, monté depuis le dossier local data/)
+DB_PATH = os.getenv("DB_PATH", "data/supervision.db")
 
 # Sessions de connexion : clé de signature du cookie. Sans SECRET_KEY, une clé
 # aléatoire est tirée à chaque démarrage (tout le monde est alors déconnecté).
