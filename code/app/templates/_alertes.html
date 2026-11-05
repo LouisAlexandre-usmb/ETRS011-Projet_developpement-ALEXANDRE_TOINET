@@ -1,0 +1,26 @@
+{# Attend `alertes` ; avec `masquer_correlees`, seule la cause racine d'une panne en cascade est listée. #}
+{% set liste = alertes|rejectattr('cause_racine_id')|list if masquer_correlees else alertes %}
+{% for categorie, titre in [('EQUIPEMENT', 'Équipements injoignables (ping)'), ('SERVICE', 'Services en erreur (relevé SNMP)')] %}
+  {% set alertes_categorie = liste|selectattr('categorie', 'equalto', categorie)|list %}
+  <h3 class="sous-titre">{{ titre }}</h3>
+  {% if alertes_categorie %}
+    <table class="tableau">
+      <thead><tr><th>Équipement</th><th>Alerte</th><th>Depuis</th></tr></thead>
+      <tbody>
+        {% for a in alertes_categorie %}
+          <tr>
+            <td><a href="/equipements/{{ a.equipement_id }}">{{ a.equipement_nom }}</a></td>
+            <td>
+              {{ a.message }}
+              {% if a.impactes %}<br><span class="meta">Cause racine, équipement(s) impacté(s) en aval : {{ a.impactes }}</span>{% endif %}
+              {% if a.racine_nom %}<br><span class="meta">Cause probable : panne de {{ a.racine_nom }}</span>{% endif %}
+            </td>
+            <td>{{ a.date_debut | date_fr }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="meta">Aucune alerte active.</p>
+  {% endif %}
+{% endfor %}

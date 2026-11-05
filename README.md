@@ -21,9 +21,9 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 Le projet est **en cours de développement**.
 
-- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP, groupes, tableau de bord simple, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures (uptime, CPU, mémoire, trafic par interface), fiche équipement avec graphiques, historique des statuts et erreurs de collecte, choix des interfaces à surveiller (à l'ajout de l'équipement, puis à chaque nouvelle interface détectée).
-- **Préparé en base, sans interface** : relation parent-enfant, intervalle de collecte, paramètres généraux.
-- **À réaliser** : calcul du débit, choix de la période des graphiques, purge de l'historique, statut dégradé, alertes et seuils, recherche et filtres, rafraîchissement automatique, corrélation d'alertes, découverte de la topologie.
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes et relations parent-enfant, modèles de supervision détectés automatiquement (générique, Cisco, Linux), tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, seuils, alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP), corrélation des pannes par cause racine.
+- **Préparé en base, sans interface** : paramètres généraux.
+- **À réaliser** : choix de la période des graphiques, purge de l'historique, recherche et filtres, rafraîchissement automatique, découverte de la topologie.
 
 ### Lancer le projet
 
@@ -41,7 +41,7 @@ Le code a évolué depuis la rédaction des documents du dossier `Documents/`. E
 
 - **Authentification** : le cahier des charges, les spécifications (section 7) et le diagramme de cas d'utilisation décrivent une version initiale sans authentification. L'application comporte en réalité un écran de connexion et deux rôles.
 - **Conteneurs** : les spécifications prévoient un conteneur unique. `docker-compose.yml` en lance un second, un agent SNMP de test qui simule un équipement réseau pendant le développement.
-- **Schéma des tables** : la section 6.2 des spécifications reste à compléter. Le schéma actuel se trouve dans [`code/app/schema.sql`](code/app/schema.sql).
+- **Schéma des tables** : la section 6.2 des spécifications reste à compléter. Le schéma actuel se trouve dans [`code/app/db.py`](code/app/db.py).
  
 ---
  

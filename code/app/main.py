@@ -1,6 +1,6 @@
 """Point d'entrée de l'application FastAPI.
 
-- Pages HTML (Jinja2)  : /, /login
+- Pages HTML (Jinja2)  : tableau de bord, fiche équipement, alertes, inventaire, connexion
 - API JSON             : /api/...
 """
 import logging
@@ -8,17 +8,17 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, collecte, config, db
+from app import auth, collecte, config, db, metriques
 from app.auth import AccesRefuse, NonConnecte, exiger_admin, utilisateur_courant
 from app.snmp_client import SnmpError, lire_infos_systeme
 from app.utilisateurs import Utilisateur
@@ -79,6 +79,31 @@ class NouvelEquipement(BaseModel):
     communaute_snmp: str = "public"
     description: str | None = None
     groupe_id: int | None = None
+    version_snmp: Literal["V1", "V2C"] = "V2C"
+    parent_id: int | None = None
+    modele_supervision_id: int | None = None   # absent = détection automatique
+
+
+class SeuilAModifier(BaseModel):
+    """Corps attendu par POST /api/seuils."""
+    metrique_id: int
+    valeur: float = Field(ge=0, le=100)
+    actif: bool = True
+
+
+def _erreur_configuration(id_equipement: int | None, version_snmp: str, parent_id: int | None,
+                           modele_supervision_id: int | None = None) -> str | None:
+    """Vérifie les choix d'un formulaire d'équipement ; renvoie le message d'erreur, ou None."""
+    if version_snmp not in ("V1", "V2C"):
+        return "Version SNMP inconnue"
+    if parent_id is not None:
+        if db.obtenir_equipement(parent_id) is None:
+            return "Équipement parent introuvable"
+        if id_equipement is not None and db.parent_creerait_un_cycle(id_equipement, parent_id):
+            return "Relation impossible : un équipement ne peut pas dépendre de lui-même ou de ses enfants"
+    if modele_supervision_id is not None and modele_supervision_id not in {m["id"] for m in db.lister_modeles()}:
+        return "Modèle de supervision inconnu"
+    return None
 
 
 async def _interroger_cible() -> tuple[dict | None, str | None]:
@@ -100,6 +125,8 @@ async def tableau_de_bord(request: Request, utilisateur: Connecte):
     return templates.TemplateResponse(request, "index.html", {
         "utilisateur": utilisateur,
         "equipements": equipements,
+        "alertes": db.lister_alertes(statut="ACTIVE"),
+        "masquer_correlees": True,
         "page_active": "tableau_de_bord",
     })
 
@@ -118,11 +145,47 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
         "enfants": db.lister_enfants(id_equipement),
         "interfaces": [itf for itf in interfaces if itf["suivi"] == "OUI"],
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" and itf["presente"] for itf in interfaces),
+        "modeles": db.lister_modeles(),
+        "alertes": db.lister_alertes(statut="ACTIVE", equipement_id=id_equipement),
+        "masquer_correlees": False,
+        "historique_alertes": db.lister_alertes(statut="CLOTUREE", equipement_id=id_equipement, limite=20),
         "changements_statut": db.lister_changements_statut(id_equipement),
         "erreurs_collecte": db.lister_erreurs_collecte(id_equipement),
         "erreur": request.query_params.get("erreur"),
         "page_active": "fiche_equipement",
     })
+
+
+@app.get("/alertes", response_class=HTMLResponse)
+async def page_alertes(request: Request, utilisateur: Connecte):
+    return templates.TemplateResponse(request, "alertes.html", {
+        "utilisateur": utilisateur,
+        "alertes": db.lister_alertes(statut="ACTIVE"),
+        "masquer_correlees": True,
+        "seuils": db.lister_seuils(),
+        "historique": db.lister_alertes(statut="CLOTUREE", limite=50),
+        "erreur": request.query_params.get("erreur"),
+        "page_active": "alertes",
+    })
+
+
+@app.post("/seuils")
+async def modifier_seuil_html(admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
+                               actif: str = Form("")):
+    """Enregistre un seuil ; il s'applique à la collecte suivante."""
+    if not 0 <= valeur <= 100 or not db.modifier_seuil(metrique_id, valeur, bool(actif)):
+        return RedirectResponse(f"/alertes?erreur={quote('Seuil invalide : entre 0 et 100 %')}", status_code=303)
+    return RedirectResponse("/alertes", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/modele")
+async def changer_modele_html(id_equipement: int, admin: Admin, modele_supervision_id: int = Form(...)):
+    """Corrige le modèle de supervision détecté automatiquement."""
+    erreur = _erreur_configuration(None, "V2C", None, modele_supervision_id)
+    if erreur:
+        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#collecte", status_code=303)
+    db.changer_modele_supervision(id_equipement, modele_supervision_id)
+    return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
 
 
 @app.get("/equipements/{id_equipement}/interfaces", response_class=HTMLResponse)
@@ -212,6 +275,7 @@ async def inventaire(request: Request, admin: Admin):
         "utilisateur": admin,
         "equipements": equipements,
         "groupes": db.lister_groupes(),
+        "modeles": db.lister_modeles(),
         "equipement_a_modifier": equipement_a_modifier,
         "erreur": erreur,
         "page_active": "inventaire",
@@ -226,11 +290,21 @@ async def ajouter_equipement_html(
     communaute_snmp: str = Form("public"),
     description: str = Form(""),
     groupe_id: str = Form(""),
+    version_snmp: str = Form("V2C"),
+    parent_id: str = Form(""),
+    modele_supervision_id: str = Form(""),
 ):
     """Ajoute un équipement depuis le formulaire de la page Inventaire."""
+    id_parent = int(parent_id) if parent_id else None
+    id_modele = int(modele_supervision_id) if modele_supervision_id else None
+    erreur = _erreur_configuration(None, version_snmp, id_parent, id_modele)
+    if erreur:
+        return RedirectResponse(f"/inventaire?erreur={quote(erreur)}", status_code=303)
+
     try:
         infos = await lire_infos_systeme(
             adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
+            version=version_snmp,
         )
     except SnmpError as exc:
         return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
@@ -240,6 +314,8 @@ async def ajouter_equipement_html(
             nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
             description=description or None, description_systeme=infos["sysDescr"],
             groupe_id=int(groupe_id) if groupe_id else None,
+            version_snmp=version_snmp, parent_id=id_parent, sys_object_id=infos.get("sysObjectID"),
+            modele_supervision_id=id_modele or db.trouver_modele_pour(infos.get("sysObjectID")),
         )
     except sqlite3.IntegrityError:
         message = f"Un équipement existe déjà pour « {adresse} »"
@@ -272,27 +348,39 @@ async def modifier_equipement_html(
     communaute_snmp: str = Form(...),
     description: str = Form(""),
     groupe_id: str = Form(""),
+    version_snmp: str = Form("V2C"),
+    parent_id: str = Form(""),
 ):
     """Met à jour un équipement existant depuis le formulaire de la page Inventaire."""
     equipement = db.obtenir_equipement(id_equipement)
     if equipement is None:
         return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
 
+    id_parent = int(parent_id) if parent_id else None
+    erreur = _erreur_configuration(id_equipement, version_snmp, id_parent)
+    if erreur:
+        return RedirectResponse(f"/inventaire?erreur={quote(erreur)}", status_code=303)
+
     description_systeme = equipement["description_systeme"]
-    if adresse != equipement["adresse"] or communaute_snmp != equipement["communaute_snmp"]:
+    sys_object_id = equipement["sys_object_id"]
+    if (adresse != equipement["adresse"] or communaute_snmp != equipement["communaute_snmp"]
+            or version_snmp != equipement["version_snmp"]):
         try:
             infos = await lire_infos_systeme(
                 adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
+                version=version_snmp,
             )
         except SnmpError as exc:
             return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
         description_systeme = infos["sysDescr"]
+        sys_object_id = infos.get("sysObjectID")
 
     try:
         db.modifier_equipement(
             id_equipement, nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
             description=description or None, groupe_id=int(groupe_id) if groupe_id else None,
             description_systeme=description_systeme,
+            version_snmp=version_snmp, parent_id=id_parent, sys_object_id=sys_object_id,
         )
     except sqlite3.IntegrityError:
         message = f"Un équipement existe déjà pour « {adresse} »"
@@ -349,13 +437,49 @@ async def mesures_equipement_api(id_equipement: int, metrique: str, utilisateur:
     return [dict(ligne) for ligne in mesures]
 
 
+@app.get("/api/equipements/{id_equipement}/debit")
+async def debit_equipement_api(id_equipement: int, metrique: Literal["if_in_octets", "if_out_octets"],
+                                interface_id: int, utilisateur: Connecte,
+                                depuis: str | None = None, jusqu_a: str | None = None):
+    """Débit d'une interface en bits/s, calculé à partir des relevés bruts de ses compteurs."""
+    interface = next((itf for itf in db.lister_interfaces(id_equipement) if itf["id"] == interface_id), None)
+    if interface is None:
+        return JSONResponse(status_code=404, content={"erreur": "Interface introuvable"})
+    mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a)
+    return metriques.calculer_debit(mesures, interface["vitesse"])
+
+
+@app.get("/api/alertes")
+async def lister_alertes_api(utilisateur: Connecte, statut: Literal["ACTIVE", "CLOTUREE"] | None = None):
+    """Liste des alertes, éventuellement filtrée par statut."""
+    return [dict(ligne) for ligne in db.lister_alertes(statut=statut)]
+
+
+@app.get("/api/seuils")
+async def lister_seuils_api(utilisateur: Connecte):
+    """Liste des seuils configurés."""
+    return [dict(ligne) for ligne in db.lister_seuils()]
+
+
+@app.post("/api/seuils")
+async def modifier_seuil_api(payload: SeuilAModifier, admin: Admin):
+    """Modifie un seuil existant."""
+    if not db.modifier_seuil(payload.metrique_id, payload.valeur, payload.actif):
+        return JSONResponse(status_code=404, content={"erreur": "Seuil introuvable"})
+    return {"statut": "ok"}
+
+
 @app.post("/api/equipements", status_code=201)
 async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
     """Ajoute un équipement, après un test de connectivité SNMP (lecture de sysDescr)."""
+    erreur = _erreur_configuration(None, payload.version_snmp, payload.parent_id, payload.modele_supervision_id)
+    if erreur:
+        return JSONResponse(status_code=400, content={"erreur": erreur})
+
     try:
         infos = await lire_infos_systeme(
             payload.adresse, payload.communaute_snmp,
-            timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
+            timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES, version=payload.version_snmp,
         )
     except SnmpError as exc:
         return JSONResponse(status_code=400, content={"erreur": str(exc)})
@@ -364,7 +488,9 @@ async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
         id_equipement = db.creer_equipement(
             nom=payload.nom, adresse=payload.adresse, communaute_snmp=payload.communaute_snmp,
             description=payload.description, description_systeme=infos["sysDescr"],
-            groupe_id=payload.groupe_id,
+            groupe_id=payload.groupe_id, version_snmp=payload.version_snmp, parent_id=payload.parent_id,
+            sys_object_id=infos.get("sysObjectID"),
+            modele_supervision_id=payload.modele_supervision_id or db.trouver_modele_pour(infos.get("sysObjectID")),
         )
     except sqlite3.IntegrityError:
         return JSONResponse(

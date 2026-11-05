@@ -28,6 +28,8 @@
       </div>
     </div>
 
+    {% include "_alertes.html" %}
+
     {% if equipements %}
       {% for groupe_nom, equips in equipements|groupby('groupe_nom') %}
         {% if groupe_nom == '~' %}

@@ -6,6 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /code
 
+# Commande ping : distingue un équipement en panne d'un service SNMP en erreur
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends iputils-ping \
+ && rm -rf /var/lib/apt/lists/*
+
 # Dépendances d'abord : cette couche reste en cache tant que requirements.txt ne change pas
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

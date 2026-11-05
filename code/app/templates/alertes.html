@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block titre %}Alertes · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Alertes actives</h2>
+      <span class="meta">{{ alertes|rejectattr('cause_racine_id')|list|length }}</span>
+    </div>
+    {% include "_alertes.html" %}
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Seuils de performance</h2></div>
+    <p class="meta">Seuils globaux, appliqués à tout le parc à chaque collecte.</p>
+    <table class="tableau">
+      <thead><tr><th>Indicateur</th><th>Seuil (%)</th><th>Actif</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+        {% for s in seuils %}
+          <tr>
+            {% if utilisateur.est_admin %}
+              <td>{{ s.libelle }}</td>
+              <td><input type="number" name="valeur" min="0" max="100" step="0.1" value="{{ s.valeur }}" required
+                         aria-label="Seuil {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
+              <td><input type="checkbox" name="actif" value="1" aria-label="{{ s.libelle }} actif"
+                         form="seuil-{{ s.metrique_id }}" {{ 'checked' if s.actif }}></td>
+              <td>
+                <form method="post" action="/seuils" id="seuil-{{ s.metrique_id }}">
+                  <input type="hidden" name="metrique_id" value="{{ s.metrique_id }}">
+                  <button type="submit">Enregistrer</button>
+                </form>
+              </td>
+            {% else %}
+              <td>{{ s.libelle }}</td><td>{{ s.valeur }}</td><td>{{ 'Oui' if s.actif else 'Non' }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Dernières alertes clôturées</h2></div>
+    <table class="tableau">
+      <thead><tr><th>Équipement</th><th>Alerte</th><th>Début</th><th>Fin</th></tr></thead>
+      <tbody>
+        {% for a in historique %}
+          <tr>
+            <td><a href="/equipements/{{ a.equipement_id }}">{{ a.equipement_nom }}</a></td>
+            <td>{{ a.message }}</td><td>{{ a.date_debut | date_fr }}</td><td>{{ a.date_fin | date_fr }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="meta">Aucune alerte clôturée.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

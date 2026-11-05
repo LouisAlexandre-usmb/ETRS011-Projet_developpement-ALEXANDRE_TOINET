@@ -1,7 +1,7 @@
-"""Client SNMP v2c minimal, basé sur PySNMP 7 (API asyncio).
+"""Client SNMP v1/v2c minimal, basé sur PySNMP 7 (API asyncio).
 
-Il sera réutilisé par le service de collecte : une fonction générique
-`snmp_get` + des fonctions métier (ici : lecture du groupe "system").
+Fonctions génériques `snmp_get` et `snmp_walk`, utilisées par le service de collecte,
+et lecture du groupe "system" pour le test de connectivité à l'ajout d'un équipement.
 """
 from pysnmp.hlapi.v3arch.asyncio import (
     CommunityData,
@@ -16,10 +16,14 @@ from pysnmp.hlapi.v3arch.asyncio import (
 
 # OID du groupe "system" de la MIB-II (RFC 1213)
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
+OID_SYS_OBJECT_ID = "1.3.6.1.2.1.1.2.0"
 OID_SYS_UPTIME = "1.3.6.1.2.1.1.3.0"
 OID_SYS_CONTACT = "1.3.6.1.2.1.1.4.0"
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
 OID_SYS_LOCATION = "1.3.6.1.2.1.1.6.0"
+
+
+MP_MODEL = {"V1": 0, "V2C": 1}   # valeur attendue par PySNMP selon la version du protocole
 
 
 class SnmpError(Exception):
@@ -38,8 +42,8 @@ def _get_engine() -> SnmpEngine:
 
 
 async def snmp_get(host: str, community: str, oids: list[str], port: int = 161,
-                   timeout: float = 2, retries: int = 1) -> dict[str, object]:
-    """Envoie un GET SNMP v2c et renvoie {oid: valeur}."""
+                   timeout: float = 2, retries: int = 1, version: str = "V2C") -> dict[str, object]:
+    """Envoie un GET SNMP et renvoie {oid: valeur}."""
     try:
         transport = await UdpTransportTarget.create((host, port), timeout=timeout, retries=retries)
     except Exception as exc:  # nom d'hôte introuvable, etc.
@@ -47,7 +51,7 @@ async def snmp_get(host: str, community: str, oids: list[str], port: int = 161,
 
     error_indication, error_status, error_index, var_binds = await get_cmd(
         _get_engine(),
-        CommunityData(community, mpModel=1),  # mpModel=1 -> SNMP v2c
+        CommunityData(community, mpModel=MP_MODEL[version]),
         transport,
         ContextData(),
         *[ObjectType(ObjectIdentity(oid)) for oid in oids],
@@ -63,7 +67,7 @@ async def snmp_get(host: str, community: str, oids: list[str], port: int = 161,
 
 
 async def snmp_walk(host: str, community: str, oid_base: str, port: int = 161,
-                    timeout: float = 2, retries: int = 1) -> dict[str, object]:
+                    timeout: float = 2, retries: int = 1, version: str = "V2C") -> dict[str, object]:
     """Parcourt une branche OID (une table SNMP, ex. ifTable) et renvoie {oid_complet: valeur}.
 
     Utilisé pour les indicateurs qui existent en plusieurs exemplaires sur un équipement
@@ -78,7 +82,7 @@ async def snmp_walk(host: str, community: str, oid_base: str, port: int = 161,
     resultats: dict[str, object] = {}
     parcours = walk_cmd(
         _get_engine(),
-        CommunityData(community, mpModel=1),
+        CommunityData(community, mpModel=MP_MODEL[version]),
         transport,
         ContextData(),
         ObjectType(ObjectIdentity(oid_base)),
@@ -106,15 +110,16 @@ def formater_uptime(ticks: int) -> str:
 
 
 async def lire_infos_systeme(host: str, community: str, port: int = 161,
-                             timeout: float = 2, retries: int = 1) -> dict[str, str]:
+                             timeout: float = 2, retries: int = 1, version: str = "V2C") -> dict[str, str]:
     """Lit le groupe "system" d'un équipement (sysDescr, sysName, uptime…)."""
     valeurs = await snmp_get(
         host, community,
-        [OID_SYS_DESCR, OID_SYS_NAME, OID_SYS_UPTIME, OID_SYS_LOCATION, OID_SYS_CONTACT],
-        port=port, timeout=timeout, retries=retries,
+        [OID_SYS_DESCR, OID_SYS_OBJECT_ID, OID_SYS_NAME, OID_SYS_UPTIME, OID_SYS_LOCATION, OID_SYS_CONTACT],
+        port=port, timeout=timeout, retries=retries, version=version,
     )
     return {
         "sysDescr": valeurs[OID_SYS_DESCR].prettyPrint(),
+        "sysObjectID": str(valeurs[OID_SYS_OBJECT_ID]),  # forme numérique, sans nom de MIB
         "sysName": valeurs[OID_SYS_NAME].prettyPrint(),
         "sysUpTime": formater_uptime(int(valeurs[OID_SYS_UPTIME])),
         "sysLocation": valeurs[OID_SYS_LOCATION].prettyPrint(),

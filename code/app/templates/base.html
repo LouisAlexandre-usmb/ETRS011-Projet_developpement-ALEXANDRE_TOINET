@@ -12,6 +12,7 @@
     {% if utilisateur %}
       <nav class="navigation">
         <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
+        <a href="/alertes" class="{{ 'actif' if page_active == 'alertes' }}">Alertes</a>
         {% if utilisateur.est_admin %}
           <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
         {% endif %}

@@ -26,6 +26,8 @@
       <dt>Description</dt><dd>{{ equipement.description or '—' }}</dd>
       <dt>Système</dt><dd>{{ equipement.description_systeme or '—' }}</dd>
       <dt>Modèle de supervision</dt><dd>{{ equipement.modele_nom }}</dd>
+      <dt>Version SNMP</dt><dd>{{ 'v1' if equipement.version_snmp == 'V1' else 'v2c' }}</dd>
+      <dt>sysObjectID</dt><dd><code>{{ equipement.sys_object_id or '—' }}</code></dd>
       <dt>Parent</dt>
       <dd>
         {% if equipement.parent_nom %}
@@ -44,6 +46,22 @@
     </dl>
   </section>
 
+  <section class="carte" id="alertes">
+    <div class="carte-titre"><h2>Alertes actives</h2></div>
+    {% include "_alertes.html" %}
+    {% if historique_alertes %}
+      <h3 class="sous-titre">Alertes clôturées</h3>
+      <table class="tableau">
+        <thead><tr><th>Alerte</th><th>Début</th><th>Fin</th></tr></thead>
+        <tbody>
+          {% for a in historique_alertes %}
+            <tr><td>{{ a.message }}</td><td>{{ a.date_debut | date_fr }}</td><td>{{ a.date_fin | date_fr }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
   <section class="carte" id="collecte">
     <div class="carte-titre"><h2>Collecte</h2></div>
     <p class="meta">
@@ -60,6 +78,16 @@
                placeholder="{{ parametres.intervalle_polling_defaut }}">
       </label>
       <button type="submit">Enregistrer</button>
+    </form>
+    <form method="post" action="/equipements/{{ equipement.id }}/modele" class="formulaire formulaire-ligne">
+      <label>Modèle de supervision
+        <select name="modele_supervision_id">
+          {% for m in modeles %}
+            <option value="{{ m.id }}" {{ 'selected' if m.id == equipement.modele_supervision_id }}>{{ m.nom }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Changer de modèle</button>
     </form>
     {% endif %}
   </section>
@@ -81,9 +109,7 @@
         <canvas id="graphique-trafic"></canvas>
       </div>
     </div>
-    <p class="meta">Le trafic affiché est le compteur brut (octets cumulés) tel que relevé par
-      SNMP, pas encore un débit — le calcul du débit (différence entre deux relevés) n'est pas
-      encore implémenté.</p>
+    <p class="meta">Débit calculé par différence entre deux relevés des compteurs. Une interruption de collecte ou une remise à zéro apparaît comme un trou dans la courbe.</p>
   </section>
 
   <section class="carte" id="interfaces">
@@ -163,6 +189,12 @@
     return reponse.ok ? reponse.json() : [];
   }
 
+  async function chargerDebit(metrique, interfaceId) {
+    const params = new URLSearchParams({ metrique, interface_id: interfaceId });
+    const reponse = await fetch(`/api/equipements/${idEquipement}/debit?${params}`);
+    return reponse.ok ? reponse.json() : [];
+  }
+
   function dessinerGraphique(canvasId, mesures, libelle, diviseur = 1) {
     const etiquettes = mesures.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
     const valeurs = mesures.map((m) => (m.valeur === null ? null : m.valeur / diviseur));
@@ -184,9 +216,10 @@
     const selecteur = document.getElementById("selecteur-interface");
     if (!selecteur || !selecteur.value) return;
     const [entrant, sortant] = await Promise.all([
-      chargerSerie("if_in_octets", selecteur.value),
-      chargerSerie("if_out_octets", selecteur.value),
+      chargerDebit("if_in_octets", selecteur.value),
+      chargerDebit("if_out_octets", selecteur.value),
     ]);
+    const enMbps = (m) => (m.valeur === null ? null : m.valeur / 1000000);
     const etiquettes = entrant.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
     if (graphiques["graphique-trafic"]) graphiques["graphique-trafic"].destroy();
     graphiques["graphique-trafic"] = new Chart(document.getElementById("graphique-trafic"), {
@@ -194,11 +227,11 @@
       data: {
         labels: etiquettes,
         datasets: [
-          { label: "Entrant (octets)", data: entrant.map((m) => m.valeur), borderColor: "#17707F" },
-          { label: "Sortant (octets)", data: sortant.map((m) => m.valeur), borderColor: "#B45514" },
+          { label: "Entrant (Mb/s)", data: entrant.map(enMbps), borderColor: "#17707F", spanGaps: false },
+          { label: "Sortant (Mb/s)", data: sortant.map(enMbps), borderColor: "#B45514", spanGaps: false },
         ],
       },
-      options: { animation: false },
+      options: { animation: false, scales: { y: { beginAtZero: true } } },
     });
   }
 

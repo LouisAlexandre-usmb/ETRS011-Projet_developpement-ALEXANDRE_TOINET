@@ -5,7 +5,7 @@ Les valeurs par défaut permettent aussi de lancer l'application hors Docker.
 import os
 import secrets
 
-# Équipement interrogé par la page de démonstration
+# Équipement interrogé par /api/equipement-test
 SNMP_TARGET = os.getenv("SNMP_TARGET", "127.0.0.1")
 SNMP_PORT = int(os.getenv("SNMP_PORT", "161"))
 SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
