@@ -6,6 +6,7 @@
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
@@ -36,7 +37,7 @@ async def lifespan(app: FastAPI):
     collecte.arreter()
 
 
-app = FastAPI(title="Supervision SNMP", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Supervision SNMP", version="0.2.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -54,6 +55,21 @@ app.include_router(auth.router)
 
 Connecte = Annotated[Utilisateur, Depends(utilisateur_courant)]
 Admin = Annotated[Utilisateur, Depends(exiger_admin)]
+
+
+def formater_date_fr(valeur: str | None) -> str:
+    """Convertit une date ISO stockée en base, en UTC ("2026-11-05T08:16:27"), en heure locale
+    lisible ("05/11/2026 09:16:27")."""
+    if not valeur:
+        return "—"
+    try:
+        date_utc = datetime.fromisoformat(valeur).replace(tzinfo=timezone.utc)
+        return date_utc.astimezone().strftime("%d/%m/%Y %H:%M:%S")
+    except ValueError:
+        return valeur
+
+
+templates.env.filters["date_fr"] = formater_date_fr
 
 
 class NouvelEquipement(BaseModel):
@@ -85,6 +101,23 @@ async def tableau_de_bord(request: Request, utilisateur: Connecte):
         "utilisateur": utilisateur,
         "equipements": equipements,
         "page_active": "tableau_de_bord",
+    })
+
+
+@app.get("/equipements/{id_equipement}", response_class=HTMLResponse)
+async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Connecte):
+    equipement = db.obtenir_equipement_detail(id_equipement)
+    if equipement is None:
+        return RedirectResponse("/", status_code=303)  # l'inventaire est réservé aux admins
+
+    return templates.TemplateResponse(request, "fiche_equipement.html", {
+        "utilisateur": utilisateur,
+        "equipement": equipement,
+        "enfants": db.lister_enfants(id_equipement),
+        "interfaces": db.lister_interfaces(id_equipement),
+        "changements_statut": db.lister_changements_statut(id_equipement),
+        "erreurs_collecte": db.lister_erreurs_collecte(id_equipement),
+        "page_active": "fiche_equipement",
     })
 
 
@@ -221,6 +254,18 @@ async def lister_equipements_api(utilisateur: Connecte):
         {cle: ligne[cle] for cle in ligne.keys() if cle != "communaute_snmp"}
         for ligne in db.lister_equipements()
     ]
+
+
+@app.get("/api/equipements/{id_equipement}/mesures")
+async def mesures_equipement_api(id_equipement: int, metrique: str, utilisateur: Connecte,
+                                  interface_id: int | None = None,
+                                  depuis: str | None = None, jusqu_a: str | None = None):
+    """Historique des relevés d'une métrique pour un équipement (et, si fournie, une
+    interface). Query params : metrique (code, ex. "cpu"), interface_id, depuis, jusqu_a."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
+    mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a)
+    return [dict(ligne) for ligne in mesures]
 
 
 @app.post("/api/equipements", status_code=201)

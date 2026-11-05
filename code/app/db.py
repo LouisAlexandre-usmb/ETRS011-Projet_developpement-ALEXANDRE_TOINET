@@ -56,17 +56,28 @@ def _seed(connexion: sqlite3.Connection) -> None:
     connexion.execute(
         "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
         "(1, 'Équipement générique', "
-        "'Basé sur la MIB-II (groupe system) ; cpu/ram dépendent du constructeur et viendront "
-        "avec des modèles dédiés')"
+        "'Basé sur la MIB-II (groupe system et ifTable) et HOST-RESOURCES-MIB pour cpu/ram ; "
+        "cpu/ram ne fonctionnent que sur les agents qui implémentent cette dernière')"
     )
-    uptime_id = connexion.execute(
-        "SELECT id FROM metrique WHERE code = 'uptime'"
-    ).fetchone()["id"]
-    connexion.execute(
-        "INSERT OR IGNORE INTO element_surveille (modele_supervision_id, metrique_id, oid) "
-        "VALUES (1, ?, '1.3.6.1.2.1.1.3.0')",
-        (uptime_id,),
-    )
+    elements_modele_generique = [
+        ("uptime", "1.3.6.1.2.1.1.3.0"),          # sysUpTime, scalaire
+        ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
+        ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
+        # HOST-RESOURCES-MIB : marche sur un agent générique (Linux...), pas forcément sur
+        # un équipement réseau avec un OS propriétaire -> à surveiller côté erreur_collecte.
+        ("cpu", "1.3.6.1.2.1.25.3.3.1.2"),  # hrProcessorLoad, table à moyenner (plusieurs cœurs)
+        ("ram", "1.3.6.1.2.1.25.2.3.1.6"),  # hrStorageUsed, à combiner avec hrStorageSize
+                                             # et filtrer sur hrStorageType = RAM (côté collecte)
+    ]
+    for code, oid in elements_modele_generique:
+        metrique_id = connexion.execute(
+            "SELECT id FROM metrique WHERE code = ?", (code,)
+        ).fetchone()["id"]
+        connexion.execute(
+            "INSERT OR IGNORE INTO element_surveille (modele_supervision_id, metrique_id, oid) "
+            "VALUES (1, ?, ?)",
+            (metrique_id, oid),
+        )
 
 
 # ---------------------------------------------------------------- équipements
@@ -115,6 +126,83 @@ def obtenir_equipement(id_equipement: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def obtenir_equipement_detail(id_equipement: int) -> sqlite3.Row | None:
+    """Équipement avec le nom de son groupe et de son parent, pour la fiche équipement."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT equipement.*, groupe.nom AS groupe_nom, parent.nom AS parent_nom, "
+            "modele_supervision.nom AS modele_nom "
+            "FROM equipement "
+            "LEFT JOIN groupe ON groupe.id = equipement.groupe_id "
+            "LEFT JOIN equipement AS parent ON parent.id = equipement.parent_id "
+            "JOIN modele_supervision ON modele_supervision.id = equipement.modele_supervision_id "
+            "WHERE equipement.id = ?",
+            (id_equipement,),
+        ).fetchone()
+
+
+def lister_enfants(id_equipement: int) -> list[sqlite3.Row]:
+    """Équipements dont le parent est celui-ci."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT id, nom, statut FROM equipement WHERE parent_id = ? ORDER BY nom",
+            (id_equipement,),
+        ).fetchall()
+
+
+def lister_interfaces(equipement_id: int) -> list[sqlite3.Row]:
+    """Interfaces d'un équipement, triées par index SNMP."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM interface WHERE equipement_id = ? ORDER BY index_snmp",
+            (equipement_id,),
+        ).fetchall()
+
+
+def lister_changements_statut(equipement_id: int, limite: int = 20) -> list[sqlite3.Row]:
+    """Historique des changements de statut d'un équipement, le plus récent en premier."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM changement_statut WHERE equipement_id = ? "
+            "ORDER BY horodatage DESC LIMIT ?",
+            (equipement_id, limite),
+        ).fetchall()
+
+
+def lister_erreurs_collecte(equipement_id: int, limite: int = 20) -> list[sqlite3.Row]:
+    """Dernières erreurs de collecte d'un équipement, la plus récente en premier."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM erreur_collecte WHERE equipement_id = ? "
+            "ORDER BY horodatage DESC LIMIT ?",
+            (equipement_id, limite),
+        ).fetchall()
+
+
+def lister_mesures(equipement_id: int, code_metrique: str, interface_id: int | None = None,
+                    depuis: str | None = None, jusqu_a: str | None = None) -> list[sqlite3.Row]:
+    """Mesures d'un équipement pour une métrique donnée (et, si fournie, une interface
+    donnée), triées par horodatage croissant."""
+    condition = "mesure.equipement_id = ? AND metrique.code = ?"
+    parametres: list = [equipement_id, code_metrique]
+    if interface_id is not None:
+        condition += " AND mesure.interface_id = ?"
+        parametres.append(interface_id)
+    if depuis:
+        condition += " AND mesure.horodatage >= ?"
+        parametres.append(depuis)
+    if jusqu_a:
+        condition += " AND mesure.horodatage <= ?"
+        parametres.append(jusqu_a)
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT mesure.horodatage, mesure.valeur, mesure.interface_id "
+            "FROM mesure JOIN metrique ON metrique.id = mesure.metrique_id "
+            f"WHERE {condition} ORDER BY mesure.horodatage",
+            parametres,
+        ).fetchall()
+
+
 def trouver_equipement(recherche: str, exact: bool = False) -> sqlite3.Row | None:
     """Trouve un équipement par nom ou adresse exacte, sinon (sauf si `exact`) par correspondance
     partielle. Renvoie None si rien ne correspond ou si plusieurs équipements correspondent."""
@@ -145,41 +233,6 @@ def modifier_equipement(id_equipement: int, nom: str, adresse: str, communaute_s
         )
 
 
-# ---------------------------------------------------------------- collecte
-
-def lire_parametres() -> sqlite3.Row:
-    """Renvoie les réglages globaux (ligne unique créée au démarrage)."""
-    with get_connection() as connexion:
-        return connexion.execute("SELECT * FROM parametres_generaux WHERE id = 1").fetchone()
-
-
-def lister_equipements_actifs() -> list[sqlite3.Row]:
-    """Renvoie les équipements à inclure dans le cycle de collecte."""
-    with get_connection() as connexion:
-        return connexion.execute("SELECT * FROM equipement WHERE actif = 1").fetchall()
-
-
-def noter_collecte_reussie(id_equipement: int) -> None:
-    """L'équipement a répondu : il est opérationnel et son compteur d'échecs repart de zéro."""
-    with get_connection() as connexion:
-        connexion.execute(
-            "UPDATE equipement SET statut = 'OPERATIONNEL', nb_echecs_consecutifs = 0, "
-            "derniere_collecte = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE id = ?",
-            (id_equipement,),
-        )
-
-
-def noter_collecte_echouee(id_equipement: int, seuil_indisponibilite: int) -> None:
-    """Compte un échec ; le statut ne passe INDISPONIBLE qu'une fois le seuil atteint."""
-    with get_connection() as connexion:
-        connexion.execute(
-            "UPDATE equipement SET nb_echecs_consecutifs = nb_echecs_consecutifs + 1, "
-            "statut = CASE WHEN nb_echecs_consecutifs + 1 >= ? THEN 'INDISPONIBLE' ELSE statut END "
-            "WHERE id = ?",
-            (seuil_indisponibilite, id_equipement),
-        )
-
-
 # ---------------------------------------------------------------- groupes
 
 def lister_groupes() -> list[sqlite3.Row]:
@@ -193,3 +246,109 @@ def creer_groupe(nom: str) -> int:
     with get_connection() as connexion:
         curseur = connexion.execute("INSERT INTO groupe (nom) VALUES (?)", (nom,))
         return curseur.lastrowid
+
+
+# ---------------------------------------------------------------- collecte
+
+def lister_equipements_actifs() -> list[sqlite3.Row]:
+    """Renvoie les équipements à collecter (actif = 1)."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM equipement WHERE actif = 1").fetchall()
+
+
+def obtenir_parametres_generaux() -> sqlite3.Row:
+    """Renvoie l'unique ligne de réglages globaux."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM parametres_generaux WHERE id = 1").fetchone()
+
+
+def lister_elements_actifs(modele_supervision_id: int) -> list[sqlite3.Row]:
+    """Éléments surveillés actifs d'un modèle, avec le code et les propriétés de leur métrique."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT element_surveille.oid, metrique.id AS metrique_id, metrique.code, "
+            "metrique.type_valeur, metrique.par_interface "
+            "FROM element_surveille JOIN metrique ON metrique.id = element_surveille.metrique_id "
+            "WHERE element_surveille.modele_supervision_id = ? AND element_surveille.actif = 1",
+            (modele_supervision_id,),
+        ).fetchall()
+
+
+def enregistrer_mesure(equipement_id: int, metrique_id: int, valeur: float | None,
+                        interface_id: int | None = None) -> None:
+    """Enregistre un relevé. valeur = None si l'équipement n'a pas répondu pour cet indicateur."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "INSERT INTO mesure (equipement_id, metrique_id, interface_id, horodatage, valeur) "
+            "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?)",
+            (equipement_id, metrique_id, interface_id, valeur),
+        )
+
+
+def upsert_interface(equipement_id: int, index_snmp: int, nom: str,
+                      vitesse: int | None, statut: str) -> int:
+    """Crée l'interface si elle est nouvelle, sinon met à jour son nom/vitesse/statut."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "INSERT INTO interface (equipement_id, index_snmp, nom, vitesse, statut) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (equipement_id, index_snmp) DO UPDATE SET "
+            "nom = excluded.nom, vitesse = excluded.vitesse, statut = excluded.statut",
+            (equipement_id, index_snmp, nom, vitesse, statut),
+        )
+        return connexion.execute(
+            "SELECT id FROM interface WHERE equipement_id = ? AND index_snmp = ?",
+            (equipement_id, index_snmp),
+        ).fetchone()["id"]
+
+
+def enregistrer_erreur_collecte(equipement_id: int, type_erreur: str, message: str | None = None) -> None:
+    """Journalise une erreur de collecte, sans jamais interrompre la collecte des autres équipements."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "INSERT INTO erreur_collecte (equipement_id, type_erreur, message) VALUES (?, ?, ?)",
+            (equipement_id, type_erreur, message),
+        )
+
+
+def _changer_statut(connexion: sqlite3.Connection, equipement_id: int,
+                     ancien_statut: str, nouveau_statut: str) -> None:
+    """Met à jour equipement.statut et trace le changement. Appelée à l'intérieur d'une
+    connexion déjà ouverte, pour que la mise à jour et la trace soient dans la même transaction."""
+    connexion.execute("UPDATE equipement SET statut = ? WHERE id = ?", (nouveau_statut, equipement_id))
+    connexion.execute(
+        "INSERT INTO changement_statut (equipement_id, ancien_statut, nouveau_statut) VALUES (?, ?, ?)",
+        (equipement_id, ancien_statut, nouveau_statut),
+    )
+
+
+def enregistrer_reussite_collecte(equipement_id: int) -> None:
+    """Après une collecte réussie (l'équipement a répondu) : échecs à zéro, horodatage, et
+    passage à OPERATIONNEL si l'équipement ne l'était pas déjà."""
+    with get_connection() as connexion:
+        ancien_statut = connexion.execute(
+            "SELECT statut FROM equipement WHERE id = ?", (equipement_id,)
+        ).fetchone()["statut"]
+        connexion.execute(
+            "UPDATE equipement SET nb_echecs_consecutifs = 0, "
+            "derniere_collecte = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE id = ?",
+            (equipement_id,),
+        )
+        if ancien_statut != "OPERATIONNEL":
+            _changer_statut(connexion, equipement_id, ancien_statut, "OPERATIONNEL")
+
+
+def enregistrer_echec_collecte(equipement_id: int, nb_echecs_avant_indisponibilite: int) -> None:
+    """Après un échec (équipement injoignable) : incrémente les échecs consécutifs, et bascule
+    en INDISPONIBLE si le seuil est atteint (jamais sur un seul échec isolé)."""
+    with get_connection() as connexion:
+        ligne = connexion.execute(
+            "SELECT statut, nb_echecs_consecutifs FROM equipement WHERE id = ?", (equipement_id,)
+        ).fetchone()
+        nouveaux_echecs = ligne["nb_echecs_consecutifs"] + 1
+        connexion.execute(
+            "UPDATE equipement SET nb_echecs_consecutifs = ? WHERE id = ?",
+            (nouveaux_echecs, equipement_id),
+        )
+        if nouveaux_echecs >= nb_echecs_avant_indisponibilite and ligne["statut"] != "INDISPONIBLE":
+            _changer_statut(connexion, equipement_id, ligne["statut"], "INDISPONIBLE")

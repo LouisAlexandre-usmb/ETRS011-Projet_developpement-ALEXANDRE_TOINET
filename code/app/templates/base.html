@@ -17,7 +17,7 @@
         {% endif %}
       </nav>
     {% endif %}
-    <span class="version">v0.1 · squelette</span>
+    <span class="version">v0.2 · collecte active</span>
     {% if utilisateur %}
       <div class="session">
         <span>{{ utilisateur.login }}</span>
@@ -38,10 +38,12 @@
 
     {% if utilisateur %}
       <p class="pied">
-        Démo SNMP sans base : <a href="/api/equipement-test">/api/equipement-test</a> ·
-        Documentation : <a href="/docs">/docs</a>
+        Test SNMP direct (sans passer par la base) : <a href="/api/equipement-test">/api/equipement-test</a> ·
+        Documentation de l'API : <a href="/docs">/docs</a>
       </p>
     {% endif %}
   </main>
+
+  {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block titre %}{{ equipement.nom }} · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <a href="/" class="lien-retour">&larr; Tableau de bord</a>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>{{ equipement.nom }}</h2>
+      <span class="pastille {{ 'ok' if equipement.statut == 'OPERATIONNEL'
+                            else 'degrade' if equipement.statut == 'DEGRADE'
+                            else 'ko' if equipement.statut == 'INDISPONIBLE'
+                            else 'attente' }}">{{ equipement.statut }}</span>
+    </div>
+    <dl class="infos">
+      <dt>Adresse</dt><dd><code>{{ equipement.adresse }}</code></dd>
+      <dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd>
+      <dt>Description</dt><dd>{{ equipement.description or '—' }}</dd>
+      <dt>Système</dt><dd>{{ equipement.description_systeme or '—' }}</dd>
+      <dt>Modèle de supervision</dt><dd>{{ equipement.modele_nom }}</dd>
+      <dt>Parent</dt>
+      <dd>
+        {% if equipement.parent_nom %}
+          <a href="/equipements/{{ equipement.parent_id }}">{{ equipement.parent_nom }}</a>
+        {% else %}—{% endif %}
+      </dd>
+      <dt>Enfants</dt>
+      <dd>
+        {% if enfants %}
+          {% for en in enfants %}<a href="/equipements/{{ en.id }}">{{ en.nom }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+        {% else %}—{% endif %}
+      </dd>
+      <dt>Échecs consécutifs</dt><dd>{{ equipement.nb_echecs_consecutifs }}</dd>
+      <dt>Dernière collecte</dt><dd>{{ equipement.derniere_collecte | date_fr if equipement.derniere_collecte else 'jamais' }}</dd>
+      <dt>Ajouté le</dt><dd>{{ equipement.date_ajout | date_fr }}</dd>
+    </dl>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Mesures</h2></div>
+    <div class="graphiques">
+      <div><canvas id="graphique-cpu"></canvas></div>
+      <div><canvas id="graphique-ram"></canvas></div>
+      <div><canvas id="graphique-uptime"></canvas></div>
+      <div>
+        <label class="meta">Interface :
+          <select id="selecteur-interface">
+            {% for itf in interfaces %}
+              <option value="{{ itf.id }}">{{ itf.nom }} ({{ itf.statut }})</option>
+            {% endfor %}
+          </select>
+        </label>
+        <canvas id="graphique-trafic"></canvas>
+      </div>
+    </div>
+    <p class="meta">Le trafic affiché est le compteur brut (octets cumulés) tel que relevé par
+      SNMP, pas encore un débit — le calcul du débit (différence entre deux relevés) n'est pas
+      encore implémenté.</p>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Interfaces</h2><span class="meta">{{ interfaces|length }}</span></div>
+    <table class="tableau">
+      <thead><tr><th>Nom</th><th>Statut</th><th>Vitesse</th></tr></thead>
+      <tbody>
+        {% for itf in interfaces %}
+          <tr>
+            <td>{{ itf.nom }}</td>
+            <td>
+              <span class="pastille {{ 'ok' if itf.statut == 'UP' else 'ko' if itf.statut == 'DOWN' else 'attente' }}">
+                {{ itf.statut }}
+              </span>
+            </td>
+            <td>
+              {% if itf.vitesse %}{{ (itf.vitesse / 1000000) | round(1) }} Mb/s{% else %}—{% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="meta">Aucune interface découverte pour l'instant.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Historique des statuts</h2></div>
+    <table class="tableau">
+      <thead><tr><th>Date</th><th>Ancien statut</th><th>Nouveau statut</th></tr></thead>
+      <tbody>
+        {% for c in changements_statut %}
+          <tr><td>{{ c.horodatage | date_fr }}</td><td>{{ c.ancien_statut }}</td><td>{{ c.nouveau_statut }}</td></tr>
+        {% else %}
+          <tr><td colspan="3" class="meta">Aucun changement enregistré.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Erreurs de collecte</h2></div>
+    <table class="tableau">
+      <thead><tr><th>Date</th><th>Type</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for err in erreurs_collecte %}
+          <tr><td>{{ err.horodatage | date_fr }}</td><td>{{ err.type_erreur }}</td><td>{{ err.message or '—' }}</td></tr>
+        {% else %}
+          <tr><td colspan="3" class="meta">Aucune erreur enregistrée.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+  const idEquipement = {{ equipement.id }};
+  const graphiques = {};
+
+  async function chargerSerie(metrique, interfaceId) {
+    const params = new URLSearchParams({ metrique });
+    if (interfaceId) params.set("interface_id", interfaceId);
+    const reponse = await fetch(`/api/equipements/${idEquipement}/mesures?${params}`);
+    return reponse.ok ? reponse.json() : [];
+  }
+
+  function dessinerGraphique(canvasId, mesures, libelle, diviseur = 1) {
+    const etiquettes = mesures.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
+    const valeurs = mesures.map((m) => (m.valeur === null ? null : m.valeur / diviseur));
+    if (graphiques[canvasId]) graphiques[canvasId].destroy();
+    graphiques[canvasId] = new Chart(document.getElementById(canvasId), {
+      type: "line",
+      data: { labels: etiquettes, datasets: [{ label: libelle, data: valeurs, borderColor: "#17707F", spanGaps: false }] },
+      options: { animation: false, scales: { y: { beginAtZero: true } } },
+    });
+  }
+
+  async function rafraichirCpuRamUptime() {
+    dessinerGraphique("graphique-cpu", await chargerSerie("cpu"), "CPU (%)");
+    dessinerGraphique("graphique-ram", await chargerSerie("ram"), "RAM (%)");
+    dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+  }
+
+  async function rafraichirTrafic() {
+    const selecteur = document.getElementById("selecteur-interface");
+    if (!selecteur || !selecteur.value) return;
+    const [entrant, sortant] = await Promise.all([
+      chargerSerie("if_in_octets", selecteur.value),
+      chargerSerie("if_out_octets", selecteur.value),
+    ]);
+    const etiquettes = entrant.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
+    if (graphiques["graphique-trafic"]) graphiques["graphique-trafic"].destroy();
+    graphiques["graphique-trafic"] = new Chart(document.getElementById("graphique-trafic"), {
+      type: "line",
+      data: {
+        labels: etiquettes,
+        datasets: [
+          { label: "Entrant (octets)", data: entrant.map((m) => m.valeur), borderColor: "#17707F" },
+          { label: "Sortant (octets)", data: sortant.map((m) => m.valeur), borderColor: "#B45514" },
+        ],
+      },
+      options: { animation: false },
+    });
+  }
+
+  rafraichirCpuRamUptime();
+  rafraichirTrafic();
+  document.getElementById("selecteur-interface")?.addEventListener("change", rafraichirTrafic);
+</script>
+{% endblock %}

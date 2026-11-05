@@ -11,6 +11,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     SnmpEngine,
     UdpTransportTarget,
     get_cmd,
+    walk_cmd,
 )
 
 # OID du groupe "system" de la MIB-II (RFC 1213)
@@ -59,6 +60,40 @@ async def snmp_get(host: str, community: str, oids: list[str], port: int = 161,
         raise SnmpError(f"{error_status.prettyPrint()} sur {fautif}")
 
     return {str(nom): valeur for nom, valeur in var_binds}
+
+
+async def snmp_walk(host: str, community: str, oid_base: str, port: int = 161,
+                    timeout: float = 2, retries: int = 1) -> dict[str, object]:
+    """Parcourt une branche OID (une table SNMP, ex. ifTable) et renvoie {oid_complet: valeur}.
+
+    Utilisé pour les indicateurs qui existent en plusieurs exemplaires sur un équipement
+    (une valeur par interface, par cœur CPU...), contrairement à snmp_get qui lit des OID
+    scalaires connus à l'avance.
+    """
+    try:
+        transport = await UdpTransportTarget.create((host, port), timeout=timeout, retries=retries)
+    except Exception as exc:  # nom d'hôte introuvable, etc.
+        raise SnmpError(f"Adresse « {host} » introuvable (vérifier l'IP ou le nom DNS)") from exc
+
+    resultats: dict[str, object] = {}
+    parcours = walk_cmd(
+        _get_engine(),
+        CommunityData(community, mpModel=1),
+        transport,
+        ContextData(),
+        ObjectType(ObjectIdentity(oid_base)),
+        lexicographicMode=False,  # s'arrête à la fin de la branche demandée, pas à la fin de la MIB
+    )
+    async for error_indication, error_status, error_index, var_binds in parcours:
+        if error_indication:
+            raise SnmpError(str(error_indication))
+        if error_status:
+            fautif = var_binds[int(error_index) - 1][0] if error_index else "?"
+            raise SnmpError(f"{error_status.prettyPrint()} sur {fautif}")
+        for nom, valeur in var_binds:
+            resultats[str(nom)] = valeur
+
+    return resultats
 
 
 def formater_uptime(ticks: int) -> str:

@@ -17,6 +17,7 @@ services:
       SNMP_TARGET: snmp-agent    # nom du service ci-dessous (résolu par le DNS de Docker)
       SNMP_COMMUNITY: public
       DB_PATH: /code/data/supervision.db
+      TZ: Europe/Paris                   # heure affichée dans l'interface et les logs
       # Valeurs de DÉVELOPPEMENT uniquement : à changer hors de vos postes
       SECRET_KEY: dev-cle-a-changer
       ADMIN_PASSWORD: admin

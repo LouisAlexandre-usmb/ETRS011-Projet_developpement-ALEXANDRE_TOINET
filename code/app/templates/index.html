@@ -42,7 +42,7 @@
           <tbody>
             {% for e in equips %}
               <tr>
-                <td>{{ e.nom }}</td>
+                <td><a href="/equipements/{{ e.id }}">{{ e.nom }}</a></td>
                 <td><code>{{ e.adresse }}</code></td>
                 <td>
                   <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'
@@ -50,7 +50,7 @@
                                         else 'ko' if e.statut == 'INDISPONIBLE'
                                         else 'attente' }}">{{ e.statut }}</span>
                 </td>
-                <td>{{ e.date_ajout }}</td>
+                <td>{{ e.date_ajout | date_fr }}</td>
               </tr>
             {% endfor %}
           </tbody>
