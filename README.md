@@ -19,8 +19,19 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 ## 🚧 Statut du projet
  
-Le projet est actuellement en phase de **cadrage / conception** : le cahier des charges fonctionnel et les spécifications techniques sont rédigés, le développement n'a pas encore démarré. Les instructions d'installation et de lancement (`docker compose up`, etc.) seront ajoutées ici dès que le socle applicatif existera.
- 
+Le socle applicatif est fonctionnel : inventaire des équipements (avec groupes et modèles de supervision), collecte SNMP automatique et périodique, tableau de bord, et fiche détaillée par équipement (statut, interfaces, historique, graphiques). Les seuils et les alertes restent à implémenter.
+
+### ▶️ Lancement
+
+Depuis le dossier `code/`, avec [Docker Desktop](https://www.docker.com/products/docker-desktop/) démarré :
+
+```bash
+docker compose up --build
+```
+
+- Tableau de bord : http://localhost:8080
+- Documentation de l'API (Swagger) : http://localhost:8080/docs
+
 ---
  
 ## **Objectifs du projet**

@@ -37,6 +37,24 @@
     </dl>
   </section>
 
+  <section class="carte" id="collecte">
+    <div class="carte-titre"><h2>Collecte</h2></div>
+    <p class="meta">
+      Intervalle effectif actuel :
+      {{ equipement.intervalle_polling or parametres.intervalle_polling_defaut }} s
+      {% if not equipement.intervalle_polling %}(valeur par défaut){% endif %}
+    </p>
+    <form method="post" action="/equipements/{{ equipement.id }}/intervalle-polling"
+          class="formulaire formulaire-ligne">
+      <label>Intervalle de polling, en secondes (vide = valeur par défaut, {{ parametres.intervalle_polling_defaut }} s)
+        <input type="number" name="intervalle_polling" min="1"
+               value="{{ equipement.intervalle_polling or '' }}"
+               placeholder="{{ parametres.intervalle_polling_defaut }}">
+      </label>
+      <button type="submit">Enregistrer</button>
+    </form>
+  </section>
+
   <section class="carte">
     <div class="carte-titre"><h2>Mesures</h2></div>
     <div class="graphiques">
@@ -46,7 +64,7 @@
       <div>
         <label class="meta">Interface :
           <select id="selecteur-interface">
-            {% for itf in interfaces %}
+            {% for itf in interfaces if itf.visible %}
               <option value="{{ itf.id }}">{{ itf.nom }} ({{ itf.statut }})</option>
             {% endfor %}
           </select>
@@ -59,12 +77,15 @@
       encore implémenté.</p>
   </section>
 
-  <section class="carte">
-    <div class="carte-titre"><h2>Interfaces</h2><span class="meta">{{ interfaces|length }}</span></div>
+  <section class="carte" id="interfaces">
+    <div class="carte-titre">
+      <h2>Interfaces supervisées</h2>
+      <span class="meta">{{ interfaces|selectattr('visible')|list|length }} sur {{ interfaces|length }}</span>
+    </div>
     <table class="tableau">
-      <thead><tr><th>Nom</th><th>Statut</th><th>Vitesse</th></tr></thead>
+      <thead><tr><th>Nom</th><th>Statut</th><th>Vitesse</th><th></th></tr></thead>
       <tbody>
-        {% for itf in interfaces %}
+        {% for itf in interfaces if itf.visible %}
           <tr>
             <td>{{ itf.nom }}</td>
             <td>
@@ -75,13 +96,40 @@
             <td>
               {% if itf.vitesse %}{{ (itf.vitesse / 1000000) | round(1) }} Mb/s{% else %}—{% endif %}
             </td>
+            <td>
+              <form method="post" action="/interfaces/{{ itf.id }}/basculer-visibilite">
+                <button type="submit" class="bouton-discret">Ne plus superviser</button>
+              </form>
+            </td>
           </tr>
         {% else %}
-          <tr><td colspan="3" class="meta">Aucune interface découverte pour l'instant.</td></tr>
+          <tr><td colspan="4" class="meta">Aucune interface affichée pour l'instant.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </section>
+
+  {% set interfaces_masquees = interfaces|rejectattr('visible')|list %}
+  {% if interfaces_masquees %}
+    <details class="carte">
+      <summary>Interfaces non supervisées ({{ interfaces_masquees|length }})</summary>
+      <table class="tableau">
+        <thead><tr><th>Nom</th><th></th></tr></thead>
+        <tbody>
+          {% for itf in interfaces_masquees %}
+            <tr>
+              <td>{{ itf.nom }}</td>
+              <td>
+                <form method="post" action="/interfaces/{{ itf.id }}/basculer-visibilite">
+                  <button type="submit" class="bouton-discret">Superviser</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  {% endif %}
 
   <section class="carte">
     <div class="carte-titre"><h2>Historique des statuts</h2></div>

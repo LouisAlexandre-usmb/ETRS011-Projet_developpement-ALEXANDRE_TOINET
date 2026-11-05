@@ -25,7 +25,17 @@ def init_db() -> None:
     """Crée les tables si besoin et pré-remplit le catalogue de base (appelé au démarrage)."""
     with get_connection() as connexion:
         connexion.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        _migrer(connexion)
         _seed(connexion)
+
+
+def _migrer(connexion: sqlite3.Connection) -> None:
+    """Ajoute les colonnes apparues après la création initiale d'une base existante
+    (pas d'outil de migration dans ce projet : on reste sur de simples ALTER TABLE)."""
+    try:
+        connexion.execute("ALTER TABLE interface ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass  # colonne déjà présente (base créée après son ajout au schéma)
 
 
 def _seed(connexion: sqlite3.Connection) -> None:
@@ -45,30 +55,50 @@ def _seed(connexion: sqlite3.Connection) -> None:
         metriques,
     )
 
+    elements_communs = [
+        ("uptime", "1.3.6.1.2.1.1.3.0"),           # sysUpTime, scalaire
+        ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
+        ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
+    ]
+
     connexion.execute(
         "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
         "(1, 'Équipement générique', "
         "'Basé sur la MIB-II (groupe system et ifTable) et HOST-RESOURCES-MIB pour cpu/ram ; "
         "cpu/ram ne fonctionnent que sur les agents qui implémentent cette dernière')"
     )
-    elements_modele_generique = [
-        ("uptime", "1.3.6.1.2.1.1.3.0"),          # sysUpTime, scalaire
-        ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
-        ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
+    _inserer_elements_surveilles(connexion, 1, elements_communs + [
         # HOST-RESOURCES-MIB : marche sur un agent générique (Linux...), pas forcément sur
         # un équipement réseau avec un OS propriétaire -> à surveiller côté erreur_collecte.
         ("cpu", "1.3.6.1.2.1.25.3.3.1.2"),  # hrProcessorLoad, table à moyenner (plusieurs cœurs)
         ("ram", "1.3.6.1.2.1.25.2.3.1.6"),  # hrStorageUsed, à combiner avec hrStorageSize
                                              # et filtrer sur hrStorageType = RAM (côté collecte)
-    ]
-    for code, oid in elements_modele_generique:
+    ])
+
+    connexion.execute(
+        "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
+        "(2, 'Switch Cisco', "
+        "'Basé sur la MIB-II (groupe system et ifTable), et sur CISCO-PROCESS-MIB / "
+        "CISCO-MEMORY-POOL-MIB pour cpu/ram (IOS ne supporte pas HOST-RESOURCES-MIB)')"
+    )
+    _inserer_elements_surveilles(connexion, 2, elements_communs + [
+        ("cpu", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),  # cpmCPUTotal5minRev, déjà en %
+        ("ram", "1.3.6.1.4.1.9.9.48.1.1.1.5"),     # ciscoMemoryPoolUsed, à combiner avec
+                                                     # ciscoMemoryPoolFree (côté collecte)
+    ])
+
+
+def _inserer_elements_surveilles(connexion: sqlite3.Connection, modele_supervision_id: int,
+                                  elements: list[tuple[str, str]]) -> None:
+    """Associe une liste de (code métrique, oid) à un modèle de supervision."""
+    for code, oid in elements:
         metrique_id = connexion.execute(
             "SELECT id FROM metrique WHERE code = ?", (code,)
         ).fetchone()["id"]
         connexion.execute(
             "INSERT OR IGNORE INTO element_surveille (modele_supervision_id, metrique_id, oid) "
-            "VALUES (1, ?, ?)",
-            (metrique_id, oid),
+            "VALUES (?, ?, ?)",
+            (modele_supervision_id, metrique_id, oid),
         )
 
 
@@ -102,6 +132,24 @@ def creer_equipement(nom: str, adresse: str, communaute_snmp: str,
              modele_supervision_id, groupe_id),
         )
         return curseur.lastrowid
+
+
+def modifier_intervalle_polling(id_equipement: int, intervalle_polling: int | None) -> None:
+    """Change l'intervalle de polling d'un équipement (None = valeur par défaut)."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET intervalle_polling = ? WHERE id = ?",
+            (intervalle_polling, id_equipement),
+        )
+
+
+def changer_modele_supervision(id_equipement: int, modele_supervision_id: int) -> None:
+    """Change le modèle de supervision d'un équipement existant."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET modele_supervision_id = ? WHERE id = ?",
+            (modele_supervision_id, id_equipement),
+        )
 
 
 def supprimer_equipement(id_equipement: int) -> None:
@@ -143,12 +191,28 @@ def lister_enfants(id_equipement: int) -> list[sqlite3.Row]:
 
 
 def lister_interfaces(equipement_id: int) -> list[sqlite3.Row]:
-    """Interfaces d'un équipement, triées par index SNMP."""
+    """Interfaces d'un équipement (visibles et masquées), triées par index SNMP."""
     with get_connection() as connexion:
         return connexion.execute(
             "SELECT * FROM interface WHERE equipement_id = ? ORDER BY index_snmp",
             (equipement_id,),
         ).fetchall()
+
+
+def basculer_visibilite_interface(interface_id: int) -> int | None:
+    """Masque une interface visible, ou réaffiche une interface masquée. Renvoie l'id de
+    son équipement (pour la redirection), ou None si l'interface n'existe pas."""
+    with get_connection() as connexion:
+        ligne = connexion.execute(
+            "SELECT equipement_id, visible FROM interface WHERE id = ?", (interface_id,)
+        ).fetchone()
+        if ligne is None:
+            return None
+        connexion.execute(
+            "UPDATE interface SET visible = ? WHERE id = ?",
+            (0 if ligne["visible"] else 1, interface_id),
+        )
+        return ligne["equipement_id"]
 
 
 def lister_changements_statut(equipement_id: int, limite: int = 20) -> list[sqlite3.Row]:
@@ -291,8 +355,11 @@ def enregistrer_mesure(equipement_id: int, metrique_id: int, valeur: float | Non
 
 
 def upsert_interface(equipement_id: int, index_snmp: int, nom: str,
-                      vitesse: int | None, statut: str) -> int:
-    """Crée l'interface si elle est nouvelle, sinon met à jour son nom/vitesse/statut."""
+                      vitesse: int | None, statut: str) -> sqlite3.Row:
+    """Crée l'interface si elle est nouvelle, sinon met à jour son nom/vitesse/statut
+    (jamais sa visibilité, que seul basculer_visibilite_interface change). Renvoie son id
+    et son indicateur de visibilité, pour que la collecte sache si elle doit relever ses
+    mesures par interface ou non."""
     with get_connection() as connexion:
         connexion.execute(
             "INSERT INTO interface (equipement_id, index_snmp, nom, vitesse, statut) "
@@ -302,9 +369,9 @@ def upsert_interface(equipement_id: int, index_snmp: int, nom: str,
             (equipement_id, index_snmp, nom, vitesse, statut),
         )
         return connexion.execute(
-            "SELECT id FROM interface WHERE equipement_id = ? AND index_snmp = ?",
+            "SELECT id, visible FROM interface WHERE equipement_id = ? AND index_snmp = ?",
             (equipement_id, index_snmp),
-        ).fetchone()["id"]
+        ).fetchone()
 
 
 def enregistrer_erreur_collecte(equipement_id: int, type_erreur: str, message: str | None = None) -> None:

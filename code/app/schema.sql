@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS interface (
     nom             TEXT NOT NULL,
     vitesse         INTEGER,            -- ifSpeed, en bits/s, si connue
     statut          TEXT NOT NULL DEFAULT 'INCONNU' CHECK (statut IN ('UP', 'DOWN', 'INCONNU')),
+    visible         INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0, 1)),  -- affichage uniquement
     UNIQUE (equipement_id, index_snmp)
 );
 

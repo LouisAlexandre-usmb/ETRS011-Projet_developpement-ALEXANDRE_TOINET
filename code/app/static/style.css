@@ -130,6 +130,16 @@ button:hover { opacity: .9; }
 
 .bouton-danger { background: var(--alerte); }
 
+.bouton-discret {
+  background: transparent;
+  color: var(--sourdine);
+  border: 1px solid var(--trait);
+  padding: .3rem .7rem;
+  font-size: .8rem;
+  font-weight: 600;
+}
+.bouton-discret:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
+
 .carte > summary {
   cursor: pointer;
   font-size: 1.15rem;
