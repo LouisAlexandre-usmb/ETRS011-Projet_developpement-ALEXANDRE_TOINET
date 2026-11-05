@@ -1,2 +1,25 @@
-# Identifiants des équipements du réseau de TP : ne jamais versionner
+# Secrets : ne jamais versionner
+.env
+.env.*
 Documents/Device_on_Network_ETRS011.txt
+
+# Base SQLite (dossier local code/data/, monté dans le conteneur)
+data/
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Éditeurs
+.vscode/
+.idea/
+
+# Systèmes et fichiers temporaires Word/PowerPoint
+.DS_Store
+Thumbs.db
+~$*
