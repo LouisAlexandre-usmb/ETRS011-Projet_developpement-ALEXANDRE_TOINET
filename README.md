@@ -21,7 +21,7 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 Le projet est **en cours de développement**.
 
-- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP, groupes, tableau de bord simple, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures (uptime, CPU, mémoire, trafic par interface), fiche équipement avec graphiques, interfaces, historique des statuts et erreurs de collecte.
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP, groupes, tableau de bord simple, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures (uptime, CPU, mémoire, trafic par interface), fiche équipement avec graphiques, historique des statuts et erreurs de collecte, choix des interfaces à surveiller (à l'ajout de l'équipement, puis à chaque nouvelle interface détectée).
 - **Préparé en base, sans interface** : relation parent-enfant, intervalle de collecte, paramètres généraux.
 - **À réaliser** : calcul du débit, choix de la période des graphiques, purge de l'historique, statut dégradé, alertes et seuils, recherche et filtres, rafraîchissement automatique, corrélation d'alertes, découverte de la topologie.
 

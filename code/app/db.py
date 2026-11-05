@@ -33,7 +33,23 @@ def init_db() -> None:
     """Crée les tables si besoin et pré-remplit le catalogue de base (appelé au démarrage)."""
     with get_connection() as connexion:
         connexion.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        _migrer(connexion)
         _seed(connexion)
+
+
+def _migrer(connexion: sqlite3.Connection) -> None:
+    """Ajoute aux bases existantes les colonnes que CREATE TABLE IF NOT EXISTS ne crée pas."""
+    colonnes = {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(interface)")}
+    if "suivi" not in colonnes:
+        connexion.execute(
+            "ALTER TABLE interface ADD COLUMN suivi TEXT NOT NULL DEFAULT 'A_VALIDER' "
+            "CHECK (suivi IN ('A_VALIDER', 'OUI', 'NON'))"
+        )
+    if "presente" not in colonnes:
+        connexion.execute(
+            "ALTER TABLE interface ADD COLUMN presente INTEGER NOT NULL DEFAULT 1 "
+            "CHECK (presente IN (0, 1))"
+        )
 
 
 def _seed(connexion: sqlite3.Connection) -> None:
@@ -89,7 +105,9 @@ def lister_equipements() -> list[sqlite3.Row]:
         return connexion.execute(
             # "~" ne sert qu'au tri : il vient après toutes les lettres, donc les équipements
             # sans groupe se retrouvent toujours en dernier plutôt que mélangés par ordre alphabétique.
-            "SELECT equipement.*, COALESCE(groupe.nom, '~') AS groupe_nom "
+            "SELECT equipement.*, COALESCE(groupe.nom, '~') AS groupe_nom, "
+            "(SELECT count(*) FROM interface WHERE interface.equipement_id = equipement.id "
+            " AND interface.suivi = 'A_VALIDER' AND interface.presente = 1) AS nb_interfaces_a_valider "
             "FROM equipement LEFT JOIN groupe ON groupe.id = equipement.groupe_id "
             "ORDER BY groupe_nom, equipement.nom"
         ).fetchall()
@@ -157,6 +175,48 @@ def lister_interfaces(equipement_id: int) -> list[sqlite3.Row]:
             "SELECT * FROM interface WHERE equipement_id = ? ORDER BY index_snmp",
             (equipement_id,),
         ).fetchall()
+
+
+def interfaces_a_mesurer(equipement_id: int) -> dict[int, int]:
+    """Interfaces cochées et encore déclarées par l'équipement : {ifIndex: id de l'interface}."""
+    with get_connection() as connexion:
+        lignes = connexion.execute(
+            "SELECT id, index_snmp FROM interface WHERE equipement_id = ? AND suivi = 'OUI' AND presente = 1",
+            (equipement_id,),
+        ).fetchall()
+    return {ligne["index_snmp"]: ligne["id"] for ligne in lignes}
+
+
+def enregistrer_choix_interfaces(equipement_id: int, affichees: list[int], surveillees: list[int]) -> None:
+    """Applique le formulaire, uniquement aux interfaces affichées : une interface découverte
+    entre l'affichage et l'envoi reste à valider au lieu d'être ignorée sans avoir été vue."""
+    cochees = set(surveillees)
+    with get_connection() as connexion:
+        connexion.executemany(
+            "UPDATE interface SET suivi = ? WHERE id = ? AND equipement_id = ?",
+            [("OUI" if id_itf in cochees else "NON", id_itf, equipement_id) for id_itf in affichees],
+        )
+
+
+def marquer_interfaces_absentes(equipement_id: int, index_declares: list[int]) -> None:
+    """Marque comme disparues les interfaces que l'équipement ne déclare plus."""
+    marques = ", ".join("?" for _ in index_declares)
+    with get_connection() as connexion:
+        connexion.execute(
+            f"UPDATE interface SET presente = 0 WHERE equipement_id = ? AND index_snmp NOT IN ({marques})",
+            (equipement_id, *index_declares),
+        )
+
+
+def supprimer_interface_absente(equipement_id: int, interface_id: int) -> bool:
+    """Supprime une interface disparue et ses mesures. Refuse une interface encore déclarée :
+    elle reviendrait à la découverte suivante (pour ne plus la suivre, il faut la décocher)."""
+    with get_connection() as connexion:
+        curseur = connexion.execute(
+            "DELETE FROM interface WHERE id = ? AND equipement_id = ? AND presente = 0",
+            (interface_id, equipement_id),
+        )
+        return curseur.rowcount > 0
 
 
 def lister_changements_statut(equipement_id: int, limite: int = 20) -> list[sqlite3.Row]:
@@ -287,14 +347,30 @@ def enregistrer_mesure(equipement_id: int, metrique_id: int, valeur: float | Non
 
 def upsert_interface(equipement_id: int, index_snmp: int, nom: str,
                       vitesse: int | None, statut: str) -> int:
-    """Crée l'interface si elle est nouvelle, sinon met à jour son nom/vitesse/statut."""
+    """Crée ou met à jour une interface détectée. Une interface déjà connue garde sa décision ;
+    une nouvelle reprend celle d'une interface de même nom (l'index SNMP peut changer au
+    redémarrage de l'équipement), sinon elle reste à valider."""
     with get_connection() as connexion:
+        connue = connexion.execute(
+            "SELECT nom, suivi FROM interface WHERE equipement_id = ? AND index_snmp = ?",
+            (equipement_id, index_snmp),
+        ).fetchone()
+        if connue and connue["nom"] == nom:
+            suivi = connue["suivi"]
+        else:
+            meme_nom = connexion.execute(
+                "SELECT suivi FROM interface WHERE equipement_id = ? AND nom = ? AND index_snmp != ? "
+                "AND suivi != 'A_VALIDER' ORDER BY id DESC LIMIT 1",
+                (equipement_id, nom, index_snmp),
+            ).fetchone()
+            suivi = meme_nom["suivi"] if meme_nom else "A_VALIDER"
         connexion.execute(
-            "INSERT INTO interface (equipement_id, index_snmp, nom, vitesse, statut) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO interface (equipement_id, index_snmp, nom, vitesse, statut, suivi, presente) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1) "
             "ON CONFLICT (equipement_id, index_snmp) DO UPDATE SET "
-            "nom = excluded.nom, vitesse = excluded.vitesse, statut = excluded.statut",
-            (equipement_id, index_snmp, nom, vitesse, statut),
+            "nom = excluded.nom, vitesse = excluded.vitesse, statut = excluded.statut, "
+            "suivi = excluded.suivi, presente = 1",
+            (equipement_id, index_snmp, nom, vitesse, statut, suivi),
         )
         return connexion.execute(
             "SELECT id FROM interface WHERE equipement_id = ? AND index_snmp = ?",

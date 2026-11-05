@@ -42,7 +42,12 @@
           <tbody>
             {% for e in equips %}
               <tr>
-                <td><a href="/equipements/{{ e.id }}">{{ e.nom }}</a></td>
+                <td>
+                  <a href="/equipements/{{ e.id }}">{{ e.nom }}</a>
+                  {% if utilisateur.est_admin and e.nb_interfaces_a_valider %}
+                    <a href="/equipements/{{ e.id }}/interfaces" class="pastille degrade">{{ e.nb_interfaces_a_valider }} interface(s) à valider</a>
+                  {% endif %}
+                </td>
                 <td><code>{{ e.adresse }}</code></td>
                 <td>
                   <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'

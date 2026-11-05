@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block titre %}Interfaces de {{ equipement.nom }} · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <a href="/equipements/{{ equipement.id }}" class="lien-retour">&larr; Fiche de {{ equipement.nom }}</a>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Interfaces à surveiller</h2>
+      <span class="meta">{{ presentes|length }} détectée(s)</span>
+    </div>
+    <p class="meta">Le trafic n'est relevé que sur les interfaces cochées. Une interface décochée reste
+      ignorée, même si elle est redétectée ; son historique est conservé.
+      {% if nb_a_valider %}Pour les interfaces à valider, une sélection vous est proposée :
+      interfaces actives, hors interfaces virtuelles courantes (Docker, boucle locale…).{% endif %}</p>
+
+    {% if presentes %}
+      <form method="post" action="/equipements/{{ equipement.id }}/interfaces">
+        <table class="tableau">
+          <thead><tr><th>Surveiller</th><th>Nom</th><th>Statut</th><th>Décision</th></tr></thead>
+          <tbody>
+            {% for itf in presentes %}
+              <tr>
+                <td>
+                  <input type="hidden" name="affichees" value="{{ itf.id }}">
+                  <input type="checkbox" name="surveillees" value="{{ itf.id }}"
+                         aria-label="Surveiller {{ itf.nom }}"
+                         {{ 'checked' if itf.suivi == 'OUI' or (itf.suivi == 'A_VALIDER' and itf.id in proposees) }}>
+                </td>
+                <td><code>{{ itf.nom }}</code></td>
+                <td>
+                  <span class="pastille {{ 'ok' if itf.statut == 'UP' else 'ko' if itf.statut == 'DOWN' else 'attente' }}">{{ itf.statut }}</span>
+                </td>
+                <td>
+                  {% if itf.suivi == 'A_VALIDER' %}<span class="pastille degrade">À valider</span>
+                  {% elif itf.suivi == 'OUI' %}Surveillée
+                  {% else %}Ignorée{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="actions-formulaire"><button type="submit">Enregistrer la sélection</button></p>
+      </form>
+    {% else %}
+      <p class="meta">Aucune interface détectée pour l'instant. La collecte réessaiera automatiquement.</p>
+    {% endif %}
+
+    <form method="post" action="/equipements/{{ equipement.id }}/interfaces/decouvrir" class="actions-formulaire">
+      <button type="submit" class="bouton-secondaire">Rechercher de nouvelles interfaces</button>
+    </form>
+  </section>
+
+  {% if absentes %}
+    <section class="carte">
+      <div class="carte-titre"><h2>Interfaces disparues</h2><span class="meta">{{ absentes|length }}</span></div>
+      <p class="meta">L'équipement ne les déclare plus. La suppression efface aussi leur historique.</p>
+      <table class="tableau">
+        <thead><tr><th>Nom</th><th>Décision</th><th></th></tr></thead>
+        <tbody>
+          {% for itf in absentes %}
+            <tr>
+              <td><code>{{ itf.nom }}</code></td>
+              <td>{{ 'À valider' if itf.suivi == 'A_VALIDER' else 'Surveillée' if itf.suivi == 'OUI' else 'Ignorée' }}</td>
+              <td>
+                <form method="post" action="/equipements/{{ equipement.id }}/interfaces/{{ itf.id }}/supprimer"
+                      data-nom="{{ itf.nom }}"
+                      onsubmit="return confirm('Supprimer « ' + this.dataset.nom + ' » et son historique ?')">
+                  <button type="submit" class="bouton-danger">Supprimer</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% endif %}
+{% endblock %}

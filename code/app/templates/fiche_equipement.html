@@ -5,6 +5,13 @@
 {% block contenu %}
   <a href="/" class="lien-retour">&larr; Tableau de bord</a>
 
+  {% if nb_a_valider %}
+    <p class="bandeau-info">
+      {{ nb_a_valider }} interface(s) détectée(s) à valider : leur trafic n'est pas relevé pour l'instant.
+      {% if utilisateur.est_admin %}<a href="/equipements/{{ equipement.id }}/interfaces">Choisir les interfaces</a>{% endif %}
+    </p>
+  {% endif %}
+
   <section class="carte">
     <div class="carte-titre">
       <h2>{{ equipement.nom }}</h2>
@@ -60,7 +67,13 @@
   </section>
 
   <section class="carte">
-    <div class="carte-titre"><h2>Interfaces</h2><span class="meta">{{ interfaces|length }}</span></div>
+    <div class="carte-titre">
+      <h2>Interfaces surveillées</h2>
+      <span class="meta">
+        {{ interfaces|length }}
+        {% if utilisateur.est_admin %}· <a href="/equipements/{{ equipement.id }}/interfaces">Gérer</a>{% endif %}
+      </span>
+    </div>
     <table class="tableau">
       <thead><tr><th>Nom</th><th>Statut</th><th>Vitesse</th></tr></thead>
       <tbody>
@@ -68,16 +81,20 @@
           <tr>
             <td>{{ itf.nom }}</td>
             <td>
-              <span class="pastille {{ 'ok' if itf.statut == 'UP' else 'ko' if itf.statut == 'DOWN' else 'attente' }}">
-                {{ itf.statut }}
-              </span>
+              {% if itf.presente %}
+                <span class="pastille {{ 'ok' if itf.statut == 'UP' else 'ko' if itf.statut == 'DOWN' else 'attente' }}">
+                  {{ itf.statut }}
+                </span>
+              {% else %}
+                <span class="pastille attente">DISPARUE</span>
+              {% endif %}
             </td>
             <td>
               {% if itf.vitesse %}{{ (itf.vitesse / 1000000) | round(1) }} Mb/s{% else %}—{% endif %}
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="3" class="meta">Aucune interface découverte pour l'instant.</td></tr>
+          <tr><td colspan="3" class="meta">Aucune interface surveillée pour l'instant.</td></tr>
         {% endfor %}
       </tbody>
     </table>

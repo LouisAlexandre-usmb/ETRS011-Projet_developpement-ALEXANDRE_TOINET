@@ -51,6 +51,17 @@ body {
   margin-bottom: 1.25rem;
 }
 
+.bandeau-info {
+  background: #FBEFD9;
+  color: #8A5A00;
+  border-radius: 8px;
+  padding: .75rem 1rem;
+  margin-bottom: 1.25rem;
+}
+.bandeau-info a { color: inherit; font-weight: 600; }
+.actions-formulaire { margin: 1rem 0 0; }
+.bouton-secondaire { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
 .carte {
   background: var(--carte);
   border: 1px solid var(--trait);

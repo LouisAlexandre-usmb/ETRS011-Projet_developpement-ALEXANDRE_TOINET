@@ -110,15 +110,71 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
     if equipement is None:
         return RedirectResponse("/", status_code=303)  # l'inventaire est réservé aux admins
 
+    interfaces = db.lister_interfaces(id_equipement)
     return templates.TemplateResponse(request, "fiche_equipement.html", {
         "utilisateur": utilisateur,
         "equipement": equipement,
         "enfants": db.lister_enfants(id_equipement),
-        "interfaces": db.lister_interfaces(id_equipement),
+        "interfaces": [itf for itf in interfaces if itf["suivi"] == "OUI"],
+        "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" and itf["presente"] for itf in interfaces),
         "changements_statut": db.lister_changements_statut(id_equipement),
         "erreurs_collecte": db.lister_erreurs_collecte(id_equipement),
         "page_active": "fiche_equipement",
     })
+
+
+@app.get("/equipements/{id_equipement}/interfaces", response_class=HTMLResponse)
+async def page_interfaces(request: Request, id_equipement: int, admin: Admin):
+    """Choix des interfaces à surveiller, proposé à l'ajout puis accessible depuis la fiche."""
+    equipement = db.obtenir_equipement(id_equipement)
+    if equipement is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+
+    interfaces = db.lister_interfaces(id_equipement)
+    presentes = [itf for itf in interfaces if itf["presente"]]
+    return templates.TemplateResponse(request, "interfaces.html", {
+        "utilisateur": admin,
+        "equipement": equipement,
+        "presentes": presentes,
+        "absentes": [itf for itf in interfaces if not itf["presente"]],
+        "proposees": {itf["id"] for itf in presentes if collecte.interface_proposee(itf)},
+        "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" for itf in presentes),
+        "erreur": request.query_params.get("erreur"),
+    })
+
+
+@app.post("/equipements/{id_equipement}/interfaces")
+async def enregistrer_interfaces_html(
+    id_equipement: int,
+    admin: Admin,
+    affichees: list[int] = Form(default=[]),
+    surveillees: list[int] = Form(default=[]),
+):
+    """Enregistre les interfaces cochées ; les autres interfaces affichées sont ignorées."""
+    db.enregistrer_choix_interfaces(id_equipement, affichees, surveillees)
+    return RedirectResponse(f"/equipements/{id_equipement}", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/interfaces/decouvrir")
+async def decouvrir_interfaces_html(id_equipement: int, admin: Admin):
+    """Relance immédiatement la recherche d'interfaces, sans attendre la prochaine collecte."""
+    equipement = db.obtenir_equipement(id_equipement)
+    if equipement is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+    cible = f"/equipements/{id_equipement}/interfaces"
+    if not await collecte.decouvrir_interfaces(equipement, config.SNMP_TIMEOUT, config.SNMP_RETRIES):
+        return RedirectResponse(f"{cible}?erreur={quote('Recherche impossible : équipement injoignable')}", status_code=303)
+    return RedirectResponse(cible, status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/interfaces/{interface_id}/supprimer")
+async def supprimer_interface_html(id_equipement: int, interface_id: int, admin: Admin):
+    """Supprime une interface que l'équipement ne déclare plus, avec son historique."""
+    cible = f"/equipements/{id_equipement}/interfaces"
+    if not db.supprimer_interface_absente(id_equipement, interface_id):
+        message = "Seule une interface disparue peut être supprimée"
+        return RedirectResponse(f"{cible}?erreur={quote(message)}", status_code=303)
+    return RedirectResponse(cible, status_code=303)
 
 
 @app.get("/inventaire", response_class=HTMLResponse)
@@ -159,7 +215,7 @@ async def ajouter_equipement_html(
         return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
 
     try:
-        db.creer_equipement(
+        id_equipement = db.creer_equipement(
             nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
             description=description or None, description_systeme=infos["sysDescr"],
             groupe_id=int(groupe_id) if groupe_id else None,
@@ -168,7 +224,11 @@ async def ajouter_equipement_html(
         message = f"Un équipement existe déjà pour « {adresse} »"
         return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
 
-    return RedirectResponse("/inventaire", status_code=303)
+    # On enchaîne sur le choix des interfaces ; en cas d'échec, la collecte les découvrira plus tard
+    await collecte.decouvrir_interfaces(
+        db.obtenir_equipement(id_equipement), config.SNMP_TIMEOUT, config.SNMP_RETRIES,
+    )
+    return RedirectResponse(f"/equipements/{id_equipement}/interfaces", status_code=303)
 
 
 @app.post("/equipements/supprimer")

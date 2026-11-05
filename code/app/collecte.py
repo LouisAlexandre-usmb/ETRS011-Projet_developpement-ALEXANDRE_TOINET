@@ -24,6 +24,9 @@ HR_STORAGE_RAM = "1.3.6.1.2.1.25.2.1.2"  # valeur de hrStorageType qui désigne 
 
 STATUT_INTERFACE_SNMP = {1: "UP", 2: "DOWN"}  # ifOperStatus ; toute autre valeur -> INCONNU
 
+# Préfixes d'interfaces virtuelles courantes, non proposées par défaut (l'admin garde le choix)
+PREFIXES_VIRTUELS = ("docker", "veth", "br-", "tap", "sit", "lo", "ovs-system")
+
 logger = logging.getLogger(__name__)
 
 # Fréquence à laquelle on cherche les équipements à interroger (et non l'intervalle de collecte) :
@@ -55,6 +58,11 @@ def arreter() -> None:
         _planificateur = None
     for tache in list(_en_cours.values()):
         tache.cancel()
+
+
+def interface_proposee(interface) -> bool:
+    """Sélection proposée à l'admin : les interfaces actives, hors virtuelles courantes."""
+    return interface["statut"] == "UP" and not interface["nom"].lower().startswith(PREFIXES_VIRTUELS)
 
 
 async def collecter_tout() -> None:
@@ -110,7 +118,8 @@ async def collecter_equipement(equipement: dict) -> None:
         )
         return
 
-    interfaces = await _decouvrir_interfaces(equipement, timeout, retries)
+    await decouvrir_interfaces(equipement, timeout, retries)
+    interfaces = db.interfaces_a_mesurer(equipement["id"])
 
     for element in db.lister_elements_actifs(equipement["modele_supervision_id"]):
         try:
@@ -134,8 +143,8 @@ async def collecter_equipement(equipement: dict) -> None:
         logger.info("%s (%s) est de nouveau joignable", equipement["nom"], host)
 
 
-async def _decouvrir_interfaces(equipement: dict, timeout: float, retries: int) -> dict[int, int]:
-    """Met à jour la table interface à partir de ifTable, renvoie {ifIndex: interface_id}."""
+async def decouvrir_interfaces(equipement: dict, timeout: float, retries: int) -> bool:
+    """Met à jour la table interface à partir de ifTable ; renvoie False si la lecture échoue."""
     host, community = equipement["adresse"], equipement["communaute_snmp"]
     try:
         noms = await snmp_walk(host, community, OID_IF_DESCR, timeout=timeout, retries=retries)
@@ -144,9 +153,9 @@ async def _decouvrir_interfaces(equipement: dict, timeout: float, retries: int) 
     except SnmpError as exc:
         db.enregistrer_erreur_collecte(equipement["id"], "INDICATEUR_NON_SUPPORTE",
                                         f"Découverte des interfaces : {exc}")
-        return {}
+        return False
 
-    correspondance = {}
+    index_declares = []
     for oid, nom in noms.items():
         index_snmp = int(oid.rsplit(".", 1)[-1])
         vitesse_oid = f"{OID_IF_SPEED}.{index_snmp}"
@@ -154,9 +163,11 @@ async def _decouvrir_interfaces(equipement: dict, timeout: float, retries: int) 
         vitesse = int(vitesses[vitesse_oid]) if vitesse_oid in vitesses else None
         code_statut = int(statuts[statut_oid]) if statut_oid in statuts else None
         statut = STATUT_INTERFACE_SNMP.get(code_statut, "INCONNU")
-        interface_id = db.upsert_interface(equipement["id"], index_snmp, str(nom), vitesse, statut)
-        correspondance[index_snmp] = interface_id
-    return correspondance
+        db.upsert_interface(equipement["id"], index_snmp, str(nom), vitesse, statut)
+        index_declares.append(index_snmp)
+    if index_declares:  # une réponse vide ne prouve pas que toutes les interfaces ont disparu
+        db.marquer_interfaces_absentes(equipement["id"], index_declares)
+    return True
 
 
 async def _collecter_scalaire(equipement: dict, element, timeout: float, retries: int) -> None:
