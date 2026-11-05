@@ -33,7 +33,7 @@ Depuis le dossier `code/`, avec Docker :
 docker compose up --build
 ```
 
-L'application est disponible sur http://localhost:8080. Les comptes de développement sont `admin` / `admin` et `lecteur` / `lecteur` : ces valeurs, définies dans `docker-compose.yml`, sont à changer hors de vos postes.
+L'application est disponible sur http://localhost:8080. Les comptes de développement sont `admin` / `admin` et `lecteur` / `lecteur` : ces valeurs, définies dans `docker-compose.yml`, sont à changer hors de vos postes. La documentation de l'API est sur http://localhost:8080/docs.
 
 ### Écarts avec les documents de conception
 

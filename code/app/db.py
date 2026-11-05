@@ -50,6 +50,8 @@ def _migrer(connexion: sqlite3.Connection) -> None:
             "ALTER TABLE interface ADD COLUMN presente INTEGER NOT NULL DEFAULT 1 "
             "CHECK (presente IN (0, 1))"
         )
+    if "visible" in colonnes:  # ancienne colonne de masquage : sa décision est reprise une fois
+        connexion.execute("UPDATE interface SET suivi = 'NON', visible = 1 WHERE visible = 0")
 
 
 def _seed(connexion: sqlite3.Connection) -> None:
@@ -69,30 +71,50 @@ def _seed(connexion: sqlite3.Connection) -> None:
         metriques,
     )
 
+    elements_communs = [
+        ("uptime", "1.3.6.1.2.1.1.3.0"),           # sysUpTime, scalaire
+        ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
+        ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
+    ]
+
     connexion.execute(
         "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
         "(1, 'Équipement générique', "
         "'Basé sur la MIB-II (groupe system et ifTable) et HOST-RESOURCES-MIB pour cpu/ram ; "
         "cpu/ram ne fonctionnent que sur les agents qui implémentent cette dernière')"
     )
-    elements_modele_generique = [
-        ("uptime", "1.3.6.1.2.1.1.3.0"),          # sysUpTime, scalaire
-        ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
-        ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
+    _inserer_elements_surveilles(connexion, 1, elements_communs + [
         # HOST-RESOURCES-MIB : marche sur un agent générique (Linux...), pas forcément sur
         # un équipement réseau avec un OS propriétaire -> à surveiller côté erreur_collecte.
         ("cpu", "1.3.6.1.2.1.25.3.3.1.2"),  # hrProcessorLoad, table à moyenner (plusieurs cœurs)
         ("ram", "1.3.6.1.2.1.25.2.3.1.6"),  # hrStorageUsed, à combiner avec hrStorageSize
                                              # et filtrer sur hrStorageType = RAM (côté collecte)
-    ]
-    for code, oid in elements_modele_generique:
+    ])
+
+    connexion.execute(
+        "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
+        "(2, 'Switch Cisco', "
+        "'Basé sur la MIB-II (groupe system et ifTable), et sur CISCO-PROCESS-MIB / "
+        "CISCO-MEMORY-POOL-MIB pour cpu/ram (IOS ne supporte pas HOST-RESOURCES-MIB)')"
+    )
+    _inserer_elements_surveilles(connexion, 2, elements_communs + [
+        ("cpu", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),  # cpmCPUTotal5minRev, déjà en %
+        ("ram", "1.3.6.1.4.1.9.9.48.1.1.1.5"),     # ciscoMemoryPoolUsed, à combiner avec
+                                                     # ciscoMemoryPoolFree (côté collecte)
+    ])
+
+
+def _inserer_elements_surveilles(connexion: sqlite3.Connection, modele_supervision_id: int,
+                                  elements: list[tuple[str, str]]) -> None:
+    """Associe une liste de (code métrique, oid) à un modèle de supervision."""
+    for code, oid in elements:
         metrique_id = connexion.execute(
             "SELECT id FROM metrique WHERE code = ?", (code,)
         ).fetchone()["id"]
         connexion.execute(
             "INSERT OR IGNORE INTO element_surveille (modele_supervision_id, metrique_id, oid) "
-            "VALUES (1, ?, ?)",
-            (metrique_id, oid),
+            "VALUES (?, ?, ?)",
+            (modele_supervision_id, metrique_id, oid),
         )
 
 
@@ -128,6 +150,24 @@ def creer_equipement(nom: str, adresse: str, communaute_snmp: str,
              modele_supervision_id, groupe_id),
         )
         return curseur.lastrowid
+
+
+def modifier_intervalle_polling(id_equipement: int, intervalle_polling: int | None) -> None:
+    """Change l'intervalle de polling d'un équipement (None = valeur par défaut)."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET intervalle_polling = ? WHERE id = ?",
+            (intervalle_polling, id_equipement),
+        )
+
+
+def changer_modele_supervision(id_equipement: int, modele_supervision_id: int) -> None:
+    """Change le modèle de supervision d'un équipement existant."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET modele_supervision_id = ? WHERE id = ?",
+            (modele_supervision_id, id_equipement),
+        )
 
 
 def supprimer_equipement(id_equipement: int) -> None:

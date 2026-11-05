@@ -19,8 +19,14 @@ OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"
 OID_IF_SPEED = "1.3.6.1.2.1.2.2.1.5"
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"
 OID_HR_STORAGE_TYPE = "1.3.6.1.2.1.25.2.3.1.2"
+OID_HR_STORAGE_USED = "1.3.6.1.2.1.25.2.3.1.6"
 OID_HR_STORAGE_SIZE = "1.3.6.1.2.1.25.2.3.1.5"
 HR_STORAGE_RAM = "1.3.6.1.2.1.25.2.1.2"  # valeur de hrStorageType qui désigne la mémoire vive
+
+OID_CISCO_MEM_POOL_NAME = "1.3.6.1.4.1.9.9.48.1.1.1.2"
+OID_CISCO_MEM_POOL_USED = "1.3.6.1.4.1.9.9.48.1.1.1.5"
+OID_CISCO_MEM_POOL_FREE = "1.3.6.1.4.1.9.9.48.1.1.1.6"
+CISCO_MEM_POOL_PRINCIPAL = "Processor"  # pool qui représente la mémoire système globale
 
 STATUT_INTERFACE_SNMP = {1: "UP", 2: "DOWN"}  # ifOperStatus ; toute autre valeur -> INCONNU
 
@@ -202,8 +208,17 @@ async def _collecter_cpu(equipement: dict, element, timeout: float, retries: int
 
 
 async def _collecter_ram(equipement: dict, element, timeout: float, retries: int) -> None:
-    """hrStorageTable : il faut d'abord trouver la ligne dont le type est "mémoire vive",
-    puis combiner hrStorageUsed et hrStorageSize pour obtenir un pourcentage."""
+    """La façon de calculer un pourcentage de RAM dépend de la MIB disponible sur
+    l'équipement (donc du modèle de supervision, donc de l'OID configuré pour "ram")."""
+    if element["oid"] == OID_CISCO_MEM_POOL_USED:
+        await _collecter_ram_cisco(equipement, element, timeout, retries)
+    else:
+        await _collecter_ram_host_resources(equipement, element, timeout, retries)
+
+
+async def _collecter_ram_host_resources(equipement: dict, element, timeout: float, retries: int) -> None:
+    """HOST-RESOURCES-MIB : il faut d'abord trouver la ligne de hrStorageTable dont le
+    type est "mémoire vive", puis combiner hrStorageUsed et hrStorageSize."""
     host, community = equipement["adresse"], equipement["communaute_snmp"]
     types = await snmp_walk(host, community, OID_HR_STORAGE_TYPE, timeout=timeout, retries=retries)
     index_ram = next(
@@ -221,3 +236,26 @@ async def _collecter_ram(equipement: dict, element, timeout: float, retries: int
         raise SnmpError("hrStorageSize = 0")
     pourcentage = float(valeurs[oid_utilisee]) / totale * 100
     db.enregistrer_mesure(equipement["id"], element["metrique_id"], pourcentage)
+
+
+async def _collecter_ram_cisco(equipement: dict, element, timeout: float, retries: int) -> None:
+    """CISCO-MEMORY-POOL-MIB (IOS ne supporte pas HOST-RESOURCES-MIB) : trouve le pool
+    "Processor" (la mémoire système globale), puis combine ciscoMemoryPoolUsed et
+    ciscoMemoryPoolFree."""
+    host, community = equipement["adresse"], equipement["communaute_snmp"]
+    noms = await snmp_walk(host, community, OID_CISCO_MEM_POOL_NAME, timeout=timeout, retries=retries)
+    index_pool = next(
+        (oid.rsplit(".", 1)[-1] for oid, nom in noms.items() if str(nom) == CISCO_MEM_POOL_PRINCIPAL),
+        None,
+    )
+    if index_pool is None:
+        raise SnmpError(f"pool mémoire « {CISCO_MEM_POOL_PRINCIPAL} » non trouvé")
+
+    oid_utilisee = f"{element['oid']}.{index_pool}"
+    oid_libre = f"{OID_CISCO_MEM_POOL_FREE}.{index_pool}"
+    valeurs = await snmp_get(host, community, [oid_utilisee, oid_libre], timeout=timeout, retries=retries)
+    utilisee = float(valeurs[oid_utilisee])
+    totale = utilisee + float(valeurs[oid_libre])
+    if totale == 0:
+        raise SnmpError("pool mémoire vide")
+    db.enregistrer_mesure(equipement["id"], element["metrique_id"], utilisee / totale * 100)

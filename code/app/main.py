@@ -114,11 +114,13 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
     return templates.TemplateResponse(request, "fiche_equipement.html", {
         "utilisateur": utilisateur,
         "equipement": equipement,
+        "parametres": db.obtenir_parametres_generaux(),
         "enfants": db.lister_enfants(id_equipement),
         "interfaces": [itf for itf in interfaces if itf["suivi"] == "OUI"],
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" and itf["presente"] for itf in interfaces),
         "changements_statut": db.lister_changements_statut(id_equipement),
         "erreurs_collecte": db.lister_erreurs_collecte(id_equipement),
+        "erreur": request.query_params.get("erreur"),
         "page_active": "fiche_equipement",
     })
 
@@ -175,6 +177,25 @@ async def supprimer_interface_html(id_equipement: int, interface_id: int, admin:
         message = "Seule une interface disparue peut être supprimée"
         return RedirectResponse(f"{cible}?erreur={quote(message)}", status_code=303)
     return RedirectResponse(cible, status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/intervalle-polling")
+async def modifier_intervalle_polling_html(id_equipement: int, admin: Admin, intervalle_polling: str = Form("")):
+    """Change l'intervalle de polling d'un équipement (champ vide = valeur globale)."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+
+    intervalle_polling = intervalle_polling.strip()
+    if not intervalle_polling:
+        db.modifier_intervalle_polling(id_equipement, None)
+        return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
+
+    if not intervalle_polling.isdigit() or int(intervalle_polling) <= 0:
+        message = "L'intervalle de polling doit être un nombre de secondes positif"
+        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(message)}#collecte", status_code=303)
+
+    db.modifier_intervalle_polling(id_equipement, int(intervalle_polling))
+    return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
 
 
 @app.get("/inventaire", response_class=HTMLResponse)

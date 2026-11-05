@@ -44,6 +44,26 @@
     </dl>
   </section>
 
+  <section class="carte" id="collecte">
+    <div class="carte-titre"><h2>Collecte</h2></div>
+    <p class="meta">
+      Intervalle effectif actuel :
+      {{ equipement.intervalle_polling or parametres.intervalle_polling_defaut }} s
+      {% if not equipement.intervalle_polling %}(valeur par défaut){% endif %}
+    </p>
+    {% if utilisateur.est_admin %}
+    <form method="post" action="/equipements/{{ equipement.id }}/intervalle-polling"
+          class="formulaire formulaire-ligne">
+      <label>Intervalle de polling, en secondes (vide = valeur par défaut, {{ parametres.intervalle_polling_defaut }} s)
+        <input type="number" name="intervalle_polling" min="1"
+               value="{{ equipement.intervalle_polling or '' }}"
+               placeholder="{{ parametres.intervalle_polling_defaut }}">
+      </label>
+      <button type="submit">Enregistrer</button>
+    </form>
+    {% endif %}
+  </section>
+
   <section class="carte">
     <div class="carte-titre"><h2>Mesures</h2></div>
     <div class="graphiques">
@@ -66,7 +86,7 @@
       encore implémenté.</p>
   </section>
 
-  <section class="carte">
+  <section class="carte" id="interfaces">
     <div class="carte-titre">
       <h2>Interfaces surveillées</h2>
       <span class="meta">
@@ -99,6 +119,7 @@
       </tbody>
     </table>
   </section>
+
 
   <section class="carte">
     <div class="carte-titre"><h2>Historique des statuts</h2></div>
