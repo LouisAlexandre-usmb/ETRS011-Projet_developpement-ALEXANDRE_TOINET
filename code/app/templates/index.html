@@ -26,6 +26,15 @@
         <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length }}</span>
         <span class="libelle">En attente</span>
       </div>
+      {% set alertes_visibles = alertes|rejectattr('cause_racine_id')|list %}
+      <div class="compteur">
+        <span class="valeur">{{ alertes_visibles|selectattr('criticite', 'equalto', 'CRITIQUE')|list|length }}</span>
+        <span class="libelle">Alertes critiques</span>
+      </div>
+      <div class="compteur">
+        <span class="valeur">{{ alertes_visibles|selectattr('criticite', 'equalto', 'AVERTISSEMENT')|list|length }}</span>
+        <span class="libelle">Avertissements</span>
+      </div>
     </div>
 
     {% include "_alertes.html" %}

@@ -62,6 +62,52 @@
     {% endif %}
   </section>
 
+  <section class="carte" id="seuils">
+    <div class="carte-titre"><h2>Seuils de cet équipement</h2></div>
+    <p class="meta">Un seuil enregistré ici remplace le <a href="/alertes">réglage global</a> pour ce service, sur cet équipement uniquement.</p>
+    <table class="tableau">
+      <thead>
+        <tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
+      </thead>
+      <tbody>
+        {% for s in seuils %}
+          <tr>
+            <td>{{ s.libelle }}</td>
+            {% if utilisateur.est_admin %}
+              <td><input type="number" name="valeur" min="0" max="100" step="0.1" value="{{ s.valeur }}" required
+                         aria-label="Avertissement {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
+              <td><input type="number" name="valeur_critique" min="0" max="100" step="0.1" value="{{ s.valeur_critique }}" required
+                         aria-label="Critique {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
+              <td><input type="checkbox" name="actif" value="1" aria-label="{{ s.libelle }} actif"
+                         form="seuil-{{ s.metrique_id }}" {{ 'checked' if s.actif }}></td>
+            {% else %}
+              <td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ 'Oui' if s.actif else 'Non' }}</td>
+            {% endif %}
+            <td>
+              {% if s.personnalise %}<span class="pastille degrade">Propre</span>
+              {% else %}<span class="pastille attente">Global</span>{% endif %}
+            </td>
+            {% if utilisateur.est_admin %}
+              <td>
+                <form method="post" action="/equipements/{{ equipement.id }}/seuils" id="seuil-{{ s.metrique_id }}">
+                  <input type="hidden" name="metrique_id" value="{{ s.metrique_id }}">
+                  <button type="submit">Enregistrer</button>
+                </form>
+                {% if s.personnalise %}
+                  <form method="post" action="/equipements/{{ equipement.id }}/seuils/{{ s.metrique_id }}/reinitialiser">
+                    <button type="submit" class="bouton-secondaire">Revenir au global</button>
+                  </form>
+                {% endif %}
+              </td>
+            {% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="meta">Aucun service avec seuil pour le modèle de cet équipement.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
   <section class="carte" id="collecte">
     <div class="carte-titre"><h2>Collecte</h2></div>
     <p class="meta">

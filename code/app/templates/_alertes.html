@@ -5,10 +5,11 @@
   <h3 class="sous-titre">{{ titre }}</h3>
   {% if alertes_categorie %}
     <table class="tableau">
-      <thead><tr><th>Équipement</th><th>Alerte</th><th>Depuis</th></tr></thead>
+      <thead><tr><th>Criticité</th><th>Équipement</th><th>Alerte</th><th>Depuis</th></tr></thead>
       <tbody>
         {% for a in alertes_categorie %}
           <tr>
+            <td><span class="pastille {{ 'ko' if a.criticite == 'CRITIQUE' else 'degrade' }}">{{ 'Critique' if a.criticite == 'CRITIQUE' else 'Avertissement' }}</span></td>
             <td><a href="/equipements/{{ a.equipement_id }}">{{ a.equipement_nom }}</a></td>
             <td>
               {{ a.message }}

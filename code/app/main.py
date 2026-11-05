@@ -84,11 +84,30 @@ class NouvelEquipement(BaseModel):
     modele_supervision_id: int | None = None   # absent = détection automatique
 
 
+class SeuilEquipement(BaseModel):
+    """Corps attendu par POST /api/equipements/{id}/seuils."""
+    metrique_id: int
+    valeur: float = Field(ge=0, le=100)
+    valeur_critique: float = Field(ge=0, le=100)
+    actif: bool = True
+
+
 class SeuilAModifier(BaseModel):
     """Corps attendu par POST /api/seuils."""
     metrique_id: int
     valeur: float = Field(ge=0, le=100)
+    valeur_critique: float = Field(ge=0, le=100)
     actif: bool = True
+
+
+def _erreur_seuil_equipement(id_equipement: int, metrique_id: int, valeur: float,
+                              valeur_critique: float) -> str | None:
+    """Vérifie un seuil propre à un équipement ; renvoie le message d'erreur, ou None."""
+    if metrique_id not in {seuil["metrique_id"] for seuil in db.seuils_de_l_equipement(id_equipement)}:
+        return "Ce service n'est pas surveillé par cet équipement"
+    if not 0 <= valeur <= valeur_critique <= 100:
+        return "Seuils invalides : entre 0 et 100 %, l'avertissement ne dépassant pas le niveau critique"
+    return None
 
 
 def _erreur_configuration(id_equipement: int | None, version_snmp: str, parent_id: int | None,
@@ -146,6 +165,7 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
         "interfaces": [itf for itf in interfaces if itf["suivi"] == "OUI"],
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" and itf["presente"] for itf in interfaces),
         "modeles": db.lister_modeles(),
+        "seuils": db.seuils_de_l_equipement(id_equipement),
         "alertes": db.lister_alertes(statut="ACTIVE", equipement_id=id_equipement),
         "masquer_correlees": False,
         "historique_alertes": db.lister_alertes(statut="CLOTUREE", equipement_id=id_equipement, limite=20),
@@ -163,6 +183,7 @@ async def page_alertes(request: Request, utilisateur: Connecte):
         "alertes": db.lister_alertes(statut="ACTIVE"),
         "masquer_correlees": True,
         "seuils": db.lister_seuils(),
+        "criticites": db.lister_criticites(),
         "historique": db.lister_alertes(statut="CLOTUREE", limite=50),
         "erreur": request.query_params.get("erreur"),
         "page_active": "alertes",
@@ -171,11 +192,41 @@ async def page_alertes(request: Request, utilisateur: Connecte):
 
 @app.post("/seuils")
 async def modifier_seuil_html(admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
-                               actif: str = Form("")):
-    """Enregistre un seuil ; il s'applique à la collecte suivante."""
-    if not 0 <= valeur <= 100 or not db.modifier_seuil(metrique_id, valeur, bool(actif)):
-        return RedirectResponse(f"/alertes?erreur={quote('Seuil invalide : entre 0 et 100 %')}", status_code=303)
+                               valeur_critique: float = Form(...), actif: str = Form("")):
+    """Enregistre les seuils d'un service ; ils s'appliquent à la collecte suivante."""
+    if (not 0 <= valeur <= valeur_critique <= 100
+            or not db.modifier_seuil(metrique_id, valeur, valeur_critique, bool(actif))):
+        message = "Seuils invalides : entre 0 et 100 %, l'avertissement ne dépassant pas le niveau critique"
+        return RedirectResponse(f"/alertes?erreur={quote(message)}", status_code=303)
     return RedirectResponse("/alertes", status_code=303)
+
+
+@app.post("/criticites")
+async def modifier_criticite_html(admin: Admin, code: str = Form(...), criticite: str = Form(...)):
+    """Change la criticité d'un type d'alerte qui ne dépend pas d'un seuil."""
+    if criticite not in ("AVERTISSEMENT", "CRITIQUE") or not db.modifier_criticite(code, criticite):
+        return RedirectResponse(f"/alertes?erreur={quote('Criticité invalide')}", status_code=303)
+    return RedirectResponse("/alertes", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/seuils")
+async def enregistrer_seuil_equipement_html(
+    id_equipement: int, admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
+    valeur_critique: float = Form(...), actif: str = Form(""),
+):
+    """Enregistre le seuil propre à cet équipement pour un service."""
+    erreur = _erreur_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique)
+    if erreur:
+        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#seuils", status_code=303)
+    db.enregistrer_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique, bool(actif))
+    return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/seuils/{metrique_id}/reinitialiser")
+async def reinitialiser_seuil_equipement_html(id_equipement: int, metrique_id: int, admin: Admin):
+    """Fait revenir un service de cet équipement au réglage global."""
+    db.supprimer_seuil_equipement(id_equipement, metrique_id)
+    return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
 
 
 @app.post("/equipements/{id_equipement}/modele")
@@ -461,10 +512,39 @@ async def lister_seuils_api(utilisateur: Connecte):
     return [dict(ligne) for ligne in db.lister_seuils()]
 
 
+@app.get("/api/equipements/{id_equipement}/seuils")
+async def seuils_equipement_api(id_equipement: int, utilisateur: Connecte):
+    """Seuils qui s'appliquent à un équipement ; `personnalise` indique un seuil propre."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
+    return [dict(ligne) for ligne in db.seuils_de_l_equipement(id_equipement)]
+
+
+@app.post("/api/equipements/{id_equipement}/seuils")
+async def enregistrer_seuil_equipement_api(id_equipement: int, payload: SeuilEquipement, admin: Admin):
+    """Enregistre le seuil propre à cet équipement pour un service."""
+    erreur = _erreur_seuil_equipement(id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique)
+    if erreur:
+        return JSONResponse(status_code=400, content={"erreur": erreur})
+    db.enregistrer_seuil_equipement(
+        id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique, payload.actif,
+    )
+    return {"statut": "ok"}
+
+
+@app.delete("/api/equipements/{id_equipement}/seuils/{metrique_id}")
+async def supprimer_seuil_equipement_api(id_equipement: int, metrique_id: int, admin: Admin):
+    """Fait revenir un service de cet équipement au réglage global."""
+    db.supprimer_seuil_equipement(id_equipement, metrique_id)
+    return {"statut": "ok"}
+
+
 @app.post("/api/seuils")
 async def modifier_seuil_api(payload: SeuilAModifier, admin: Admin):
-    """Modifie un seuil existant."""
-    if not db.modifier_seuil(payload.metrique_id, payload.valeur, payload.actif):
+    """Modifie les seuils d'un service."""
+    if payload.valeur > payload.valeur_critique:
+        return JSONResponse(status_code=400, content={"erreur": "L'avertissement dépasse le niveau critique"})
+    if not db.modifier_seuil(payload.metrique_id, payload.valeur, payload.valeur_critique, payload.actif):
         return JSONResponse(status_code=404, content={"erreur": "Seuil introuvable"})
     return {"statut": "ok"}
 

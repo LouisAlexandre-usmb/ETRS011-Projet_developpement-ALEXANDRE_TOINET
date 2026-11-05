@@ -21,7 +21,7 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 Le projet est **en cours de développement**.
 
-- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes et relations parent-enfant, modèles de supervision détectés automatiquement (générique, Cisco, Linux), tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, seuils, alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP), corrélation des pannes par cause racine.
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes et relations parent-enfant, modèles de supervision détectés automatiquement (générique, Cisco, Linux), tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, seuils d'avertissement et critiques par service (globaux ou propres à un équipement), alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP), corrélation des pannes par cause racine.
 - **Préparé en base, sans interface** : paramètres généraux.
 - **À réaliser** : choix de la période des graphiques, purge de l'historique, recherche et filtres, rafraîchissement automatique, découverte de la topologie.
 

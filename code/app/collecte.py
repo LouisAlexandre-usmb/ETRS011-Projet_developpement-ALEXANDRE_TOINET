@@ -159,9 +159,12 @@ def _appliquer_seuil(equipement: dict, element, valeur: float | None, seuils: di
     """Ouvre ou clôture l'alerte de seuil d'un indicateur selon sa dernière valeur."""
     seuil = seuils.get(element["metrique_id"])
     if seuil is not None and valeur is not None and valeur > seuil["valeur"]:
+        critique = valeur > seuil["valeur_critique"]
+        limite = seuil["valeur_critique"] if critique else seuil["valeur"]
         db.ouvrir_alerte(
             equipement["id"], "SERVICE", "SEUIL_DEPASSE",
-            f"{seuil['libelle']} à {valeur:.1f} % (seuil : {seuil['valeur']:g} %)", element["metrique_id"],
+            f"{seuil['libelle']} à {valeur:.1f} % (seuil {'critique' if critique else 'd’avertissement'} : {limite:g} %)",
+            element["metrique_id"], "CRITIQUE" if critique else "AVERTISSEMENT",
         )
     else:
         db.cloturer_alerte(equipement["id"], "SEUIL_DEPASSE", element["metrique_id"])
@@ -184,7 +187,7 @@ async def collecter_equipement(equipement: dict) -> None:
     db.cloturer_alerte(id_equipement, "SNMP_EN_ECHEC")
     await decouvrir_interfaces(equipement, timeout, retries)
     interfaces = db.interfaces_a_mesurer(id_equipement)
-    seuils = {seuil["metrique_id"]: seuil for seuil in db.lister_seuils() if seuil["actif"]}
+    seuils = {seuil["metrique_id"]: seuil for seuil in db.seuils_de_l_equipement(id_equipement) if seuil["actif"]}
 
     for element in db.lister_elements_actifs(equipement["modele_supervision_id"]):
         metrique_id = element["metrique_id"]
