@@ -13,7 +13,7 @@
       <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
       <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
     </nav>
-    <span class="version">v0.2 · collecte active</span>
+    <span class="version">v0.3 · modèles et rétention</span>
   </header>
 
   <main class="contenu">
@@ -28,6 +28,23 @@
       Documentation de l'API : <a href="/docs">/docs</a>
     </p>
   </main>
+
+  <script>
+    // N'affiche, dans une légende de modèles de supervision, que la bulle d'aide du
+    // modèle actuellement sélectionné dans le <select> associé (data-legende-modeles
+    // référence l'id du conteneur de la légende).
+    document.querySelectorAll("select[data-legende-modeles]").forEach(function (select) {
+      var legende = document.getElementById(select.dataset.legendeModeles);
+      if (!legende) return;
+      function majAffichage() {
+        legende.querySelectorAll(".info-bulle-modele").forEach(function (bulle) {
+          bulle.style.display = bulle.dataset.modele === select.value ? "" : "none";
+        });
+      }
+      select.addEventListener("change", majAffichage);
+      majAffichage();
+    });
+  </script>
 
   {% block scripts %}{% endblock %}
 </body>

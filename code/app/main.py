@@ -30,14 +30,16 @@ TICK_PLANIFICATEUR = 10
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    db.purger_mesures_anciennes()  # rattrape tout retard pris pendant un arrêt prolongé
     planificateur = AsyncIOScheduler()
     planificateur.add_job(collecte.verifier_echeances, "interval", seconds=TICK_PLANIFICATEUR)
+    planificateur.add_job(db.purger_mesures_anciennes, "interval", hours=24)
     planificateur.start()
     yield
     planificateur.shutdown()
 
 
-app = FastAPI(title="Supervision SNMP", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Supervision SNMP", version="0.3.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -93,9 +95,13 @@ async def fiche_equipement(request: Request, id_equipement: int):
     if equipement is None:
         return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
 
+    codes_actifs = {e["code"] for e in db.lister_elements_actifs(equipement["modele_supervision_id"])}
+
     return templates.TemplateResponse(request, "fiche_equipement.html", {
         "equipement": equipement,
         "parametres": db.obtenir_parametres_generaux(),
+        "modeles": db.lister_modeles_supervision(),
+        "codes_actifs": codes_actifs,
         "enfants": db.lister_enfants(id_equipement),
         "interfaces": db.lister_interfaces(id_equipement),
         "changements_statut": db.lister_changements_statut(id_equipement),
@@ -124,6 +130,35 @@ async def modifier_intervalle_polling_html(id_equipement: int, intervalle_pollin
     return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
 
 
+@app.post("/equipements/{id_equipement}/duree-conservation")
+async def modifier_duree_conservation_html(id_equipement: int, duree_conservation: str = Form("")):
+    """Change la durée de conservation des mesures d'un équipement (vide = valeur par défaut,
+    30 jours maximum)."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+
+    duree_conservation = duree_conservation.strip()
+    if not duree_conservation:
+        db.modifier_duree_conservation(id_equipement, None)
+        return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
+
+    if not duree_conservation.isdigit() or not (1 <= int(duree_conservation) <= 30):
+        message = "La durée de conservation doit être comprise entre 1 et 30 jours"
+        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(message)}#collecte", status_code=303)
+
+    db.modifier_duree_conservation(id_equipement, int(duree_conservation))
+    return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/modele-supervision")
+async def changer_modele_supervision_html(id_equipement: int, modele_supervision_id: int = Form(...)):
+    """Change le modèle de supervision d'un équipement depuis sa fiche."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+    db.changer_modele_supervision(id_equipement, modele_supervision_id)
+    return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
+
+
 @app.post("/interfaces/{id_interface}/basculer-visibilite")
 async def basculer_visibilite_interface_html(id_interface: int):
     """Masque/réaffiche une interface sur la fiche de son équipement (n'affecte pas la collecte)."""
@@ -146,6 +181,7 @@ async def inventaire(request: Request):
     return templates.TemplateResponse(request, "inventaire.html", {
         "equipements": equipements,
         "groupes": db.lister_groupes(),
+        "modeles": db.lister_modeles_supervision(),
         "equipement_a_modifier": equipement_a_modifier,
         "erreur": erreur,
         "page_active": "inventaire",
@@ -159,6 +195,7 @@ async def ajouter_equipement_html(
     communaute_snmp: str = Form("public"),
     description: str = Form(""),
     groupe_id: str = Form(""),
+    modele_supervision_id: int = Form(1),
 ):
     """Ajoute un équipement depuis le formulaire de la page Inventaire."""
     try:
@@ -166,19 +203,20 @@ async def ajouter_equipement_html(
             adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
         )
     except SnmpError as exc:
-        return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
+        return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}#ajouter", status_code=303)
 
     try:
         db.creer_equipement(
             nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
             description=description or None, description_systeme=infos["sysDescr"],
             groupe_id=int(groupe_id) if groupe_id else None,
+            modele_supervision_id=modele_supervision_id,
         )
     except sqlite3.IntegrityError:
         message = f"Un équipement existe déjà pour « {adresse} »"
-        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}#ajouter", status_code=303)
 
-    return RedirectResponse("/inventaire", status_code=303)
+    return RedirectResponse("/inventaire#ajouter", status_code=303)
 
 
 @app.post("/equipements/supprimer")
@@ -187,9 +225,9 @@ async def supprimer_equipement_html(recherche: str = Form(...)):
     equipement = db.trouver_equipement(recherche)
     if equipement is None:
         message = f"Aucun équipement (ou plusieurs) ne correspond à « {recherche} »"
-        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}#supprimer", status_code=303)
     db.supprimer_equipement(equipement["id"])
-    return RedirectResponse("/inventaire", status_code=303)
+    return RedirectResponse("/inventaire#supprimer", status_code=303)
 
 
 @app.post("/equipements/modifier")
@@ -204,7 +242,7 @@ async def modifier_equipement_html(
     """Met à jour un équipement existant depuis le formulaire de la page Inventaire."""
     equipement = db.obtenir_equipement(id_equipement)
     if equipement is None:
-        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}#modifier", status_code=303)
 
     description_systeme = equipement["description_systeme"]
     if adresse != equipement["adresse"] or communaute_snmp != equipement["communaute_snmp"]:
@@ -213,7 +251,7 @@ async def modifier_equipement_html(
                 adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
             )
         except SnmpError as exc:
-            return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
+            return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}#modifier", status_code=303)
         description_systeme = infos["sysDescr"]
 
     try:
@@ -224,9 +262,9 @@ async def modifier_equipement_html(
         )
     except sqlite3.IntegrityError:
         message = f"Un équipement existe déjà pour « {adresse} »"
-        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}#modifier", status_code=303)
 
-    return RedirectResponse("/inventaire", status_code=303)
+    return RedirectResponse("/inventaire#modifier", status_code=303)
 
 
 @app.post("/groupes")
@@ -236,8 +274,8 @@ async def creer_groupe_html(nom: str = Form(...)):
         db.creer_groupe(nom)
     except sqlite3.IntegrityError:
         message = f"Le groupe « {nom} » existe déjà"
-        return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
-    return RedirectResponse("/inventaire", status_code=303)
+        return RedirectResponse(f"/inventaire?erreur={quote(message)}#groupes", status_code=303)
+    return RedirectResponse("/inventaire#groupes", status_code=303)
 
 
 # ---------------------------------------------------------------- API JSON

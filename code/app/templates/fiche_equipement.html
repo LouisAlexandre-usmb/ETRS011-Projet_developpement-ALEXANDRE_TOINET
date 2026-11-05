@@ -53,25 +53,80 @@
       </label>
       <button type="submit">Enregistrer</button>
     </form>
+
+    <p class="meta">
+      Conservation des mesures :
+      {{ equipement.duree_conservation or parametres.duree_conservation_detail }} j
+      {% if not equipement.duree_conservation %}(valeur par défaut){% endif %}
+      — 30 j maximum
+    </p>
+    <form method="post" action="/equipements/{{ equipement.id }}/duree-conservation"
+          class="formulaire formulaire-ligne">
+      <label>Conservation, en jours (vide = valeur par défaut, {{ parametres.duree_conservation_detail }} j ; 30 j max)
+        <input type="number" name="duree_conservation" min="1" max="30"
+               value="{{ equipement.duree_conservation or '' }}"
+               placeholder="{{ parametres.duree_conservation_detail }}">
+      </label>
+      <button type="submit">Enregistrer</button>
+    </form>
+
+    <form method="post" action="/equipements/{{ equipement.id }}/modele-supervision"
+          class="formulaire formulaire-ligne">
+      <label>Modèle de supervision
+        <select name="modele_supervision_id" data-legende-modeles="legende-modeles-collecte">
+          {% for m in modeles %}
+            <option value="{{ m.id }}" {{ 'selected' if m.id == equipement.modele_supervision_id }}>{{ m.nom }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Changer</button>
+    </form>
+    <p class="legende-modeles" id="legende-modeles-collecte">
+      {% for m in modeles %}
+        <span class="info-bulle info-bulle-modele" data-modele="{{ m.id }}" tabindex="0">{{ m.nom }}<span class="info-bulle-icone">i</span><span class="info-bulle-texte">{{ m.description }}</span></span>
+      {% endfor %}
+    </p>
   </section>
 
   <section class="carte">
     <div class="carte-titre"><h2>Mesures</h2></div>
-    <div class="graphiques">
-      <div><canvas id="graphique-cpu"></canvas></div>
-      <div><canvas id="graphique-ram"></canvas></div>
-      <div><canvas id="graphique-uptime"></canvas></div>
-      <div>
-        <label class="meta">Interface :
-          <select id="selecteur-interface">
-            {% for itf in interfaces if itf.visible %}
-              <option value="{{ itf.id }}">{{ itf.nom }} ({{ itf.statut }})</option>
-            {% endfor %}
-          </select>
-        </label>
-        <canvas id="graphique-trafic"></canvas>
-      </div>
+
+    <div class="plage-temps">
+      <label>Depuis
+        <input type="datetime-local" id="plage-depuis">
+      </label>
+      <label>Jusqu'à
+        <input type="datetime-local" id="plage-jusqua">
+      </label>
+      <button type="button" id="plage-appliquer">Appliquer</button>
+      <span class="plage-raccourcis">
+        <button type="button" class="bouton-discret" data-heures="1">1 h</button>
+        <button type="button" class="bouton-discret" data-heures="24">24 h</button>
+        <button type="button" class="bouton-discret" data-heures="168">7 j</button>
+        <button type="button" class="bouton-discret" id="plage-hier">Hier</button>
+      </span>
     </div>
+
+    <div class="graphiques">
+      {% if 'cpu' in codes_actifs %}<div><canvas id="graphique-cpu"></canvas></div>{% endif %}
+      {% if 'ram' in codes_actifs %}<div><canvas id="graphique-ram"></canvas></div>{% endif %}
+      {% if 'uptime' in codes_actifs %}<div><canvas id="graphique-uptime"></canvas></div>{% endif %}
+      {% if 'if_in_octets' in codes_actifs or 'if_out_octets' in codes_actifs %}
+        <div>
+          <label class="meta">Interface :
+            <select id="selecteur-interface">
+              {% for itf in interfaces if itf.visible %}
+                <option value="{{ itf.id }}">{{ itf.nom }} ({{ itf.statut }})</option>
+              {% endfor %}
+            </select>
+          </label>
+          <canvas id="graphique-trafic"></canvas>
+        </div>
+      {% endif %}
+    </div>
+    {% if not codes_actifs %}
+      <p class="meta">Aucune métrique active pour le modèle de supervision de cet équipement.</p>
+    {% endif %}
     <p class="meta">Le trafic affiché est le compteur brut (octets cumulés) tel que relevé par
       SNMP, pas encore un débit — le calcul du débit (différence entre deux relevés) n'est pas
       encore implémenté.</p>
@@ -166,15 +221,37 @@
   const idEquipement = {{ equipement.id }};
   const graphiques = {};
 
+  // Les horodatages en base sont en UTC ; les champs datetime-local, eux, sont en heure
+  // locale du navigateur -> il faut convertir dans les deux sens pour que la plage
+  // choisie corresponde vraiment à ce qui est affiché.
+  function versValeurDatetimeLocal(date) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  function versHorodatageUTC(valeurLocale) {
+    return valeurLocale ? new Date(valeurLocale).toISOString().slice(0, 19) : null;
+  }
+
+  function formaterEtiquette(horodatage) {
+    const date = new Date(horodatage + "Z");
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
   async function chargerSerie(metrique, interfaceId) {
     const params = new URLSearchParams({ metrique });
     if (interfaceId) params.set("interface_id", interfaceId);
+    const depuis = versHorodatageUTC(document.getElementById("plage-depuis").value);
+    const jusqua = versHorodatageUTC(document.getElementById("plage-jusqua").value);
+    if (depuis) params.set("depuis", depuis);
+    if (jusqua) params.set("jusqu_a", jusqua);
     const reponse = await fetch(`/api/equipements/${idEquipement}/mesures?${params}`);
     return reponse.ok ? reponse.json() : [];
   }
 
   function dessinerGraphique(canvasId, mesures, libelle, diviseur = 1) {
-    const etiquettes = mesures.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
+    const etiquettes = mesures.map((m) => formaterEtiquette(m.horodatage));
     const valeurs = mesures.map((m) => (m.valeur === null ? null : m.valeur / diviseur));
     if (graphiques[canvasId]) graphiques[canvasId].destroy();
     graphiques[canvasId] = new Chart(document.getElementById(canvasId), {
@@ -185,9 +262,15 @@
   }
 
   async function rafraichirCpuRamUptime() {
-    dessinerGraphique("graphique-cpu", await chargerSerie("cpu"), "CPU (%)");
-    dessinerGraphique("graphique-ram", await chargerSerie("ram"), "RAM (%)");
-    dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+    if (document.getElementById("graphique-cpu")) {
+      dessinerGraphique("graphique-cpu", await chargerSerie("cpu"), "CPU (%)");
+    }
+    if (document.getElementById("graphique-ram")) {
+      dessinerGraphique("graphique-ram", await chargerSerie("ram"), "RAM (%)");
+    }
+    if (document.getElementById("graphique-uptime")) {
+      dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+    }
   }
 
   async function rafraichirTrafic() {
@@ -197,7 +280,7 @@
       chargerSerie("if_in_octets", selecteur.value),
       chargerSerie("if_out_octets", selecteur.value),
     ]);
-    const etiquettes = entrant.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
+    const etiquettes = entrant.map((m) => formaterEtiquette(m.horodatage));
     if (graphiques["graphique-trafic"]) graphiques["graphique-trafic"].destroy();
     graphiques["graphique-trafic"] = new Chart(document.getElementById("graphique-trafic"), {
       type: "line",
@@ -212,8 +295,37 @@
     });
   }
 
-  rafraichirCpuRamUptime();
-  rafraichirTrafic();
+  function rafraichirTout() {
+    rafraichirCpuRamUptime();
+    rafraichirTrafic();
+  }
+
+  function appliquerPlage(depuis, jusqua) {
+    document.getElementById("plage-depuis").value = versValeurDatetimeLocal(depuis);
+    document.getElementById("plage-jusqua").value = versValeurDatetimeLocal(jusqua);
+    rafraichirTout();
+  }
+
+  document.querySelectorAll(".plage-raccourcis button[data-heures]").forEach((bouton) => {
+    bouton.addEventListener("click", () => {
+      const maintenant = new Date();
+      const depuis = new Date(maintenant.getTime() - bouton.dataset.heures * 3600 * 1000);
+      appliquerPlage(depuis, maintenant);
+    });
+  });
+
+  document.getElementById("plage-hier").addEventListener("click", () => {
+    const hier = new Date();
+    hier.setDate(hier.getDate() - 1);
+    appliquerPlage(
+      new Date(hier.getFullYear(), hier.getMonth(), hier.getDate(), 0, 0, 0),
+      new Date(hier.getFullYear(), hier.getMonth(), hier.getDate(), 23, 59, 59),
+    );
+  });
+
+  document.getElementById("plage-appliquer").addEventListener("click", rafraichirTout);
   document.getElementById("selecteur-interface")?.addEventListener("change", rafraichirTrafic);
+
+  appliquerPlage(new Date(Date.now() - 24 * 3600 * 1000), new Date());  // plage par défaut : 24 h
 </script>
 {% endblock %}

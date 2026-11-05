@@ -37,6 +37,11 @@ def _migrer(connexion: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass  # colonne déjà présente (base créée après son ajout au schéma)
 
+    try:
+        connexion.execute("ALTER TABLE equipement ADD COLUMN duree_conservation INTEGER")
+    except sqlite3.OperationalError:
+        pass  # colonne déjà présente
+
 
 def _seed(connexion: sqlite3.Connection) -> None:
     """Insère les données de référence si elles n'existent pas encore (idempotent)."""
@@ -64,8 +69,10 @@ def _seed(connexion: sqlite3.Connection) -> None:
     connexion.execute(
         "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
         "(1, 'Équipement générique', "
-        "'Basé sur la MIB-II (groupe system et ifTable) et HOST-RESOURCES-MIB pour cpu/ram ; "
-        "cpu/ram ne fonctionnent que sur les agents qui implémentent cette dernière')"
+        "'Supervise la disponibilité, le trafic entrant/sortant par interface, le CPU et la "
+        "mémoire (via HOST-RESOURCES-MIB). Convient à un équipement avec un OS généraliste "
+        "(serveur Linux, NAS...) ; le CPU et la RAM ne remonteront rien sur un équipement "
+        "réseau à OS propriétaire (switch, routeur constructeur)')"
     )
     _inserer_elements_surveilles(connexion, 1, elements_communs + [
         # HOST-RESOURCES-MIB : marche sur un agent générique (Linux...), pas forcément sur
@@ -78,14 +85,24 @@ def _seed(connexion: sqlite3.Connection) -> None:
     connexion.execute(
         "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
         "(2, 'Switch Cisco', "
-        "'Basé sur la MIB-II (groupe system et ifTable), et sur CISCO-PROCESS-MIB / "
-        "CISCO-MEMORY-POOL-MIB pour cpu/ram (IOS ne supporte pas HOST-RESOURCES-MIB)')"
+        "'Supervise la disponibilité, le trafic entrant/sortant par interface, le CPU et la "
+        "mémoire — spécifique aux équipements Cisco IOS (via CISCO-PROCESS-MIB et "
+        "CISCO-MEMORY-POOL-MIB). À réserver aux équipements de cette marque')"
     )
     _inserer_elements_surveilles(connexion, 2, elements_communs + [
         ("cpu", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),  # cpmCPUTotal5minRev, déjà en %
         ("ram", "1.3.6.1.4.1.9.9.48.1.1.1.5"),     # ciscoMemoryPoolUsed, à combiner avec
                                                      # ciscoMemoryPoolFree (côté collecte)
     ])
+
+    connexion.execute(
+        "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
+        "(3, 'Équipement réseau basique', "
+        "'Supervise uniquement la disponibilité et le trafic entrant/sortant par interface "
+        "(pas de CPU ni de RAM). Le choix le plus sûr pour un équipement réseau dont on ne "
+        "connaît pas les MIB constructeur, ou qui ne remonte aucune donnée de CPU/RAM en SNMP')"
+    )
+    _inserer_elements_surveilles(connexion, 3, elements_communs)
 
 
 def _inserer_elements_surveilles(connexion: sqlite3.Connection, modele_supervision_id: int,
@@ -141,6 +158,35 @@ def modifier_intervalle_polling(id_equipement: int, intervalle_polling: int | No
             "UPDATE equipement SET intervalle_polling = ? WHERE id = ?",
             (intervalle_polling, id_equipement),
         )
+
+
+def modifier_duree_conservation(id_equipement: int, duree_conservation: int | None) -> None:
+    """Change la durée de conservation des mesures d'un équipement, en jours
+    (None = valeur par défaut). Le maximum (30 j) est vérifié côté route, pas ici."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE equipement SET duree_conservation = ? WHERE id = ?",
+            (duree_conservation, id_equipement),
+        )
+
+
+def purger_mesures_anciennes() -> int:
+    """Supprime les mesures plus anciennes que la durée de conservation effective de
+    chaque équipement (la sienne si réglée, sinon la valeur par défaut). Renvoie le
+    nombre de lignes supprimées."""
+    parametres = obtenir_parametres_generaux()
+    total_supprime = 0
+    with get_connection() as connexion:
+        equipements = connexion.execute("SELECT id, duree_conservation FROM equipement").fetchall()
+        for equipement in equipements:
+            duree = equipement["duree_conservation"] or parametres["duree_conservation_detail"]
+            curseur = connexion.execute(
+                "DELETE FROM mesure WHERE equipement_id = ? "
+                "AND horodatage < datetime('now', '-' || ? || ' days')",
+                (equipement["id"], duree),
+            )
+            total_supprime += curseur.rowcount
+    return total_supprime
 
 
 def changer_modele_supervision(id_equipement: int, modele_supervision_id: int) -> None:
@@ -294,6 +340,12 @@ def lister_groupes() -> list[sqlite3.Row]:
     """Renvoie tous les groupes, triés par nom."""
     with get_connection() as connexion:
         return connexion.execute("SELECT * FROM groupe ORDER BY nom").fetchall()
+
+
+def lister_modeles_supervision() -> list[sqlite3.Row]:
+    """Renvoie tous les modèles de supervision, triés par nom."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM modele_supervision ORDER BY nom").fetchall()
 
 
 def creer_groupe(nom: str) -> int:

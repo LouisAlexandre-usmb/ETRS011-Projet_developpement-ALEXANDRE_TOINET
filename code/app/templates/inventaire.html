@@ -3,7 +3,7 @@
 {% block titre %}Gestion de l'inventaire · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte">
+  <section class="carte" id="ajouter">
     <div class="carte-titre">
       <h2>Ajouter un équipement</h2>
     </div>
@@ -25,6 +25,18 @@
           {% endfor %}
         </select>
       </label>
+      <label>Modèle de supervision
+        <select name="modele_supervision_id" data-legende-modeles="legende-modeles-ajout">
+          {% for m in modeles %}
+            <option value="{{ m.id }}" {{ 'selected' if m.id == 1 }}>{{ m.nom }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p class="legende-modeles" id="legende-modeles-ajout">
+        {% for m in modeles %}
+          <span class="info-bulle info-bulle-modele" data-modele="{{ m.id }}" tabindex="0">{{ m.nom }}<span class="info-bulle-icone">i</span><span class="info-bulle-texte">{{ m.description }}</span></span>
+        {% endfor %}
+      </p>
       <label>Description (optionnel)
         <input type="text" name="description">
       </label>
@@ -40,12 +52,12 @@
     </datalist>
   {% endif %}
 
-  <section class="carte">
+  <section class="carte" id="modifier">
     <div class="carte-titre">
       <h2>Modifier un équipement</h2>
     </div>
     {% if equipements %}
-      <form method="get" action="/inventaire" class="formulaire formulaire-ligne">
+      <form method="get" action="/inventaire#modifier" class="formulaire formulaire-ligne">
         <label>Nom ou adresse
           <input type="text" name="modifier" list="dl-equipements"
                  placeholder="ex. Switch-TP ou 192.168.140.141" required>
@@ -84,7 +96,7 @@
     {% endif %}
   </section>
 
-  <section class="carte">
+  <section class="carte" id="supprimer">
     <div class="carte-titre">
       <h2>Supprimer un équipement</h2>
     </div>
@@ -102,7 +114,7 @@
     {% endif %}
   </section>
 
-  <section class="carte">
+  <section class="carte" id="groupes">
     <div class="carte-titre">
       <h2>Créer un groupe</h2>
     </div>

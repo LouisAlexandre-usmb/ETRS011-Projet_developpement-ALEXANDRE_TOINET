@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS equipement (
     version_snmp            TEXT NOT NULL DEFAULT 'V2C' CHECK (version_snmp IN ('V1', 'V2C')),
     communaute_snmp         TEXT NOT NULL,
     intervalle_polling      INTEGER,                -- NULL = valeur globale (parametres_generaux)
+    duree_conservation      INTEGER                 -- en jours, NULL = valeur par défaut (30, le max)
+                                CHECK (duree_conservation IS NULL
+                                       OR (duree_conservation > 0 AND duree_conservation <= 30)),
     actif                   INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     statut                  TEXT NOT NULL DEFAULT 'EN_ATTENTE'
                                 CHECK (statut IN ('EN_ATTENTE', 'OPERATIONNEL', 'DEGRADE', 'INDISPONIBLE')),
@@ -63,7 +66,7 @@ CREATE TABLE IF NOT EXISTS parametres_generaux (
     nb_echecs_avant_indisponibilite INTEGER NOT NULL DEFAULT 3,
     delai_reponse_snmp              REAL NOT NULL DEFAULT 2,
     periode_rafraichissement        INTEGER NOT NULL DEFAULT 30,
-    duree_conservation_detail       INTEGER NOT NULL DEFAULT 7,
+    duree_conservation_detail       INTEGER NOT NULL DEFAULT 30,
     duree_conservation_agregee      INTEGER NOT NULL DEFAULT 365
 );
 

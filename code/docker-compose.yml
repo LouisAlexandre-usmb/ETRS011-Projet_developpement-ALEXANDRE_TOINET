@@ -20,10 +20,28 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       - snmp-agent
+      - snmp-agent-routeur
+      - snmp-agent-serveur
+      - snmp-agent-switch-embarque
+      - snmp-agent-ap-wifi
 
-  # Faux équipement réseau : un agent SNMP v2c (Net-SNMP) pour tester sans matériel
+  # Faux équipements réseau : des agents SNMP v2c (Net-SNMP) pour tester sans matériel,
+  # avec des identités différentes. Les deux derniers excluent volontairement
+  # HOST-RESOURCES-MIB pour simuler un OS embarqué propriétaire (cf. leur snmpd.conf).
   snmp-agent:
-    build: ./snmp-agent
+    build: ./agents-test/snmp-agent
+
+  snmp-agent-routeur:
+    build: ./agents-test/snmp-agent-routeur
+
+  snmp-agent-serveur:
+    build: ./agents-test/snmp-agent-serveur
+
+  snmp-agent-switch-embarque:
+    build: ./agents-test/snmp-agent-switch-embarque
+
+  snmp-agent-ap-wifi:
+    build: ./agents-test/snmp-agent-ap-wifi
 
 volumes:
   donnees:
