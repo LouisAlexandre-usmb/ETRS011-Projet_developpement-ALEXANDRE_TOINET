@@ -66,3 +66,48 @@ CREATE TABLE IF NOT EXISTS parametres_generaux (
     duree_conservation_detail       INTEGER NOT NULL DEFAULT 7,
     duree_conservation_agregee      INTEGER NOT NULL DEFAULT 365
 );
+
+-- Interface réseau d'un équipement (ifTable SNMP).
+CREATE TABLE IF NOT EXISTS interface (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id   INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    index_snmp      INTEGER NOT NULL,   -- ifIndex
+    nom             TEXT NOT NULL,
+    vitesse         INTEGER,            -- ifSpeed, en bits/s, si connue
+    statut          TEXT NOT NULL DEFAULT 'INCONNU' CHECK (statut IN ('UP', 'DOWN', 'INCONNU')),
+    UNIQUE (equipement_id, index_snmp)
+);
+
+-- Relevé d'une métrique à un instant donné, pour un équipement (et son interface si la
+-- métrique est par_interface). valeur = NULL signifie que l'équipement n'a pas répondu à cet
+-- instant (un trou dans les courbes), pas une valeur nulle.
+CREATE TABLE IF NOT EXISTS mesure (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    metrique_id   INTEGER NOT NULL REFERENCES metrique(id),
+    interface_id  INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    horodatage    TEXT NOT NULL,
+    valeur        REAL
+);
+CREATE INDEX IF NOT EXISTS idx_mesure_lecture ON mesure (equipement_id, metrique_id, horodatage);
+
+-- Historique des changements de statut d'un équipement.
+CREATE TABLE IF NOT EXISTS changement_statut (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id  INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    horodatage     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    ancien_statut  TEXT NOT NULL
+        CHECK (ancien_statut IN ('EN_ATTENTE', 'OPERATIONNEL', 'DEGRADE', 'INDISPONIBLE')),
+    nouveau_statut TEXT NOT NULL
+        CHECK (nouveau_statut IN ('EN_ATTENTE', 'OPERATIONNEL', 'DEGRADE', 'INDISPONIBLE'))
+);
+
+-- Journal des erreurs de collecte : n'interrompt jamais la supervision du reste du parc.
+CREATE TABLE IF NOT EXISTS erreur_collecte (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    horodatage    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    type_erreur   TEXT NOT NULL CHECK (type_erreur IN
+        ('INJOIGNABLE', 'ECHEC_AUTHENTIFICATION', 'INDICATEUR_NON_SUPPORTE', 'VALEUR_ABERRANTE')),
+    message       TEXT
+);
