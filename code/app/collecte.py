@@ -276,6 +276,40 @@ async def collecter_equipement(equipement: dict, services: set[int] | None = Non
         logger.info("%s (%s) est de nouveau joignable", equipement["nom"], equipement["adresse"])
 
 
+async def _indicateur_repond(equipement: dict, element, options: dict) -> bool:
+    """Vrai si l'équipement fournit un pourcentage valide pour cet indicateur (rien n'est enregistré)."""
+    lecture = _collecter_cpu if element["code"] == "cpu" else _collecter_ram
+    try:
+        return 0 <= await lecture(equipement, element, options) <= 100
+    except Exception:  # OID absent, table vide, délai dépassé… : la détection ne bloque jamais un ajout
+        return False
+
+
+async def detecter_modele(adresse: str, communaute: str, version: str, sys_object_id: str | None) -> int:
+    """Choisit le modèle dont le CPU et la RAM répondent le mieux. À égalité, ou si rien ne répond,
+    sysObjectID départage ; à défaut, c'est le modèle de plus petit id, le générique."""
+    equipement = {"adresse": adresse, "communaute_snmp": communaute}
+    options = {"timeout": config.SNMP_TIMEOUT, "retries": config.SNMP_RETRIES, "version": version}
+    essais = [
+        (modele["id"], element)
+        for modele in db.lister_modeles()
+        for element in db.lister_elements_actifs(modele["id"])
+        if element["code"] in ("cpu", "ram")
+    ]
+    # En parallèle : un équipement qui ne répond pas ne coûte qu'un seul délai d'attente
+    reponses = await asyncio.gather(*(_indicateur_repond(equipement, element, options) for _, element in essais))
+    scores: dict[int, int] = {}
+    for (id_modele, _), repond in zip(essais, reponses):
+        scores[id_modele] = scores.get(id_modele, 0) + repond
+
+    par_sys_object_id = db.trouver_modele_pour(sys_object_id)
+    meilleur_score = max(scores.values(), default=0)
+    meilleurs = sorted(id_modele for id_modele, score in scores.items() if score == meilleur_score)
+    if meilleur_score == 0 or par_sys_object_id in meilleurs:
+        return par_sys_object_id
+    return meilleurs[0]
+
+
 async def decouvrir_interfaces(equipement: dict, timeout: float, retries: int) -> bool:
     """Met à jour la table interface à partir de ifTable ; renvoie False si la lecture échoue."""
     host, community = equipement["adresse"], equipement["communaute_snmp"]

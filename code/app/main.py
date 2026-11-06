@@ -506,13 +506,17 @@ async def ajouter_equipement_html(
     except SnmpError as exc:
         return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
 
+    sys_object_id = infos.get("sysObjectID")
+    if id_modele is None:
+        id_modele = await collecte.detecter_modele(adresse, communaute_snmp, version_snmp, sys_object_id)
+
     try:
         id_equipement = db.creer_equipement(
             nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
             description=description or None, description_systeme=infos["sysDescr"],
             groupe_id=int(groupe_id) if groupe_id else None,
-            version_snmp=version_snmp, parent_id=id_parent, sys_object_id=infos.get("sysObjectID"),
-            modele_supervision_id=id_modele or db.trouver_modele_pour(infos.get("sysObjectID")),
+            version_snmp=version_snmp, parent_id=id_parent, sys_object_id=sys_object_id,
+            modele_supervision_id=id_modele,
         )
     except sqlite3.IntegrityError:
         message = f"Un équipement existe déjà pour « {adresse} »"
@@ -722,13 +726,17 @@ async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
     except SnmpError as exc:
         return JSONResponse(status_code=400, content={"erreur": str(exc)})
 
+    sys_object_id = infos.get("sysObjectID")
+    id_modele = payload.modele_supervision_id or await collecte.detecter_modele(
+        payload.adresse, payload.communaute_snmp, payload.version_snmp, sys_object_id,
+    )
+
     try:
         id_equipement = db.creer_equipement(
             nom=payload.nom, adresse=payload.adresse, communaute_snmp=payload.communaute_snmp,
             description=payload.description, description_systeme=infos["sysDescr"],
             groupe_id=payload.groupe_id, version_snmp=payload.version_snmp, parent_id=payload.parent_id,
-            sys_object_id=infos.get("sysObjectID"),
-            modele_supervision_id=payload.modele_supervision_id or db.trouver_modele_pour(infos.get("sysObjectID")),
+            sys_object_id=sys_object_id, modele_supervision_id=id_modele,
         )
     except sqlite3.IntegrityError:
         return JSONResponse(
