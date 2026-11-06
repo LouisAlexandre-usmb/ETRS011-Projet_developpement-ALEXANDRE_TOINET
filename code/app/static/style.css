@@ -6,6 +6,9 @@
   --accent: #17707F;
   --alerte: #B45514;
   --trait: #E2E0D8;
+  --statut-ok: #2E7D32;
+  --statut-degrade: #E08E00;
+  --statut-ko: #C62828;
 }
 
 * { box-sizing: border-box; }
@@ -41,6 +44,7 @@ body {
 .navigation a.actif { color: #fff; border-bottom-color: var(--accent); }
 
 .contenu { max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+.contenu-large { max-width: 1320px; }
 
 .bandeau-erreur {
   background: #F6E3D6;
@@ -60,6 +64,7 @@ body {
 }
 .carte-titre { display: flex; align-items: center; justify-content: space-between; }
 .carte-titre h2 { margin: 0; font-size: 1.15rem; }
+.carte-titre h2 .pastille { margin-left: .6rem; vertical-align: middle; }
 .meta { color: var(--sourdine); font-size: .9rem; }
 
 .pastille {
@@ -68,10 +73,12 @@ body {
   padding: .2rem .7rem;
   border-radius: 999px;
 }
-.pastille.ok { background: #DDF0EE; color: var(--accent); }
-.pastille.ko { background: #F6E3D6; color: var(--alerte); }
-.pastille.degrade { background: #FBEFD9; color: #8A5A00; }
+.pastille.ok { background: #E3F3E4; color: var(--statut-ok); }
+.pastille.ko { background: #FBE4E4; color: var(--statut-ko); }
+.pastille.degrade { background: #FDEFD9; color: var(--statut-degrade); }
 .pastille.attente { background: #EDEBE4; color: var(--sourdine); }
+.pastille.type-statut { background: #EDEBE4; color: var(--encre); }
+.pastille.type-erreur { background: #F6E3D6; color: var(--alerte); }
 
 .sous-titre {
   margin: 1.5rem 0 0;
@@ -89,7 +96,19 @@ body {
   letter-spacing: normal;
 }
 
-.compteurs { display: flex; gap: 2rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.tableau-bord-colonnes {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .tableau-bord-colonnes { grid-template-columns: 1fr; }
+}
+
+.synthese { display: flex; flex-direction: column; align-items: center; gap: 1.5rem; margin-top: 1.25rem; }
+.compteurs { display: flex; gap: 1.5rem; flex-wrap: wrap; justify-content: center; }
+.camembert { width: 180px; height: 180px; }
 .compteur { display: flex; flex-direction: column; gap: .15rem; }
 .compteur .valeur { font-size: 1.6rem; font-weight: 700; }
 .compteur .libelle { font-size: .8rem; color: var(--sourdine); }
@@ -147,6 +166,15 @@ button:hover { opacity: .9; }
   color: var(--encre);
 }
 .carte > summary::marker { color: var(--accent); }
+
+summary.resume-groupe {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.pastilles-resume { display: flex; gap: .4rem; }
+.pastilles-resume .pastille { padding: .15rem .55rem; font-size: .75rem; }
 
 .formulaire {
   display: grid;
@@ -210,13 +238,32 @@ button:hover { opacity: .9; }
 }
 .plage-raccourcis { display: flex; gap: .5rem; }
 
+.selecteur-ligne { display: flex; align-items: center; gap: .6rem; }
+.select-leger {
+  border: 1px solid var(--trait);
+  border-radius: 6px;
+  padding: .4rem .6rem;
+  font: inherit;
+  font-size: .85rem;
+  color: var(--encre);
+  background: var(--carte);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
 .graphiques {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: 1.5rem;
   margin-top: 1.25rem;
 }
-.graphiques canvas { max-height: 220px; }
+.graphiques canvas { max-height: 300px; }
 
 .legende-modeles {
   margin: .4rem 0 1rem;
@@ -266,6 +313,32 @@ button:hover { opacity: .9; }
 }
 .info-bulle:hover .info-bulle-texte,
 .info-bulle:focus .info-bulle-texte { opacity: 1; visibility: visible; }
+
+.infos-ligne {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem 2rem;
+  margin: .9rem 0 0;
+  font-size: .82rem;
+}
+.infos-ligne > div { display: flex; align-items: baseline; gap: .4rem; }
+.infos-ligne dt {
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--accent);
+  margin: 0;
+  white-space: nowrap;
+}
+.infos-ligne dd { margin: 0; max-width: 22rem; }
+
+dialog {
+  border: none;
+  border-radius: 10px;
+  padding: 1.75rem;
+  width: min(90vw, 480px);
+  background: var(--carte);
+  color: var(--encre);
+}
+dialog::backdrop { background: rgba(19, 35, 58, .55); }
 
 .infos {
   display: grid;

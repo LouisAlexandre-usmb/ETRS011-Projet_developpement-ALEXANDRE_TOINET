@@ -3,10 +3,8 @@
 {% block titre %}Gestion de l'inventaire · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte" id="ajouter">
-    <div class="carte-titre">
-      <h2>Ajouter un équipement</h2>
-    </div>
+  <details class="carte" id="ajouter" {{ 'open' if section_ouverte == 'ajouter' }}>
+    <summary>Ajouter un équipement à la supervision</summary>
     <form method="post" action="/equipements" class="formulaire">
       <label>Nom
         <input type="text" name="nom" required>
@@ -42,7 +40,7 @@
       </label>
       <button type="submit">Ajouter</button>
     </form>
-  </section>
+  </details>
 
   {% if equipements %}
     <datalist id="dl-equipements">
@@ -52,13 +50,11 @@
     </datalist>
   {% endif %}
 
-  <section class="carte" id="modifier">
-    <div class="carte-titre">
-      <h2>Modifier un équipement</h2>
-    </div>
+  <details class="carte" id="modifier" {{ 'open' if section_ouverte == 'modifier' }}>
+    <summary>Modifier un équipement supervisé</summary>
     {% if equipements %}
       <form method="get" action="/inventaire#modifier" class="formulaire formulaire-ligne">
-        <label>Nom ou adresse
+        <label>Nom ou adresse IP
           <input type="text" name="modifier" list="dl-equipements"
                  placeholder="ex. Switch-TP ou 192.168.140.141" required>
         </label>
@@ -94,16 +90,14 @@
     {% else %}
       <p class="meta">Aucun équipement enregistré pour le moment.</p>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="carte" id="supprimer">
-    <div class="carte-titre">
-      <h2>Supprimer un équipement</h2>
-    </div>
+  <details class="carte" id="supprimer" {{ 'open' if section_ouverte == 'supprimer' }}>
+    <summary>Supprimer un équipement de la supervision</summary>
     {% if equipements %}
       <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne"
             onsubmit="return confirm('Confirmer la suppression de cet équipement et de son historique ?')">
-        <label>Nom ou adresse
+        <label>Nom ou adresse IP
           <input type="text" name="recherche" list="dl-equipements"
                  placeholder="ex. Switch-TP ou 192.168.140.141" required>
         </label>
@@ -112,17 +106,15 @@
     {% else %}
       <p class="meta">Aucun équipement enregistré pour le moment.</p>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="carte" id="groupes">
-    <div class="carte-titre">
-      <h2>Créer un groupe</h2>
-    </div>
+  <details class="carte" id="groupes" {{ 'open' if section_ouverte == 'groupes' }}>
+    <summary>Créer un groupe d'équipements</summary>
     <form method="post" action="/groupes" class="formulaire formulaire-ligne">
       <label>Nom du groupe
         <input type="text" name="nom" required>
       </label>
       <button type="submit">Créer</button>
     </form>
-  </section>
+  </details>
 {% endblock %}

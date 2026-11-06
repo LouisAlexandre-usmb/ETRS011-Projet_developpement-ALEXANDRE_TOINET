@@ -12,11 +12,12 @@
     <nav class="navigation">
       <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
       <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
+      <a href="/logs" class="{{ 'actif' if page_active == 'logs' }}">Logs</a>
     </nav>
-    <span class="version">v0.3 · modèles et rétention</span>
+    <span class="version">v0.4 · tableau de bord et logs</span>
   </header>
 
-  <main class="contenu">
+  <main class="contenu{{ ' contenu-large' if page_active in ('fiche_equipement', 'tableau_de_bord') }}">
     {% if erreur %}
       <p class="bandeau-erreur">{{ erreur }}</p>
     {% endif %}

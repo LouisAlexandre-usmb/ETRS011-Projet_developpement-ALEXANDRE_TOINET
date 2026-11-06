@@ -3,62 +3,121 @@
 {% block titre %}Tableau de bord · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte">
-    <div class="carte-titre">
-      <h2>Tableau de bord</h2>
-      <span class="meta">{{ equipements|length }} équipement(s)</span>
-    </div>
-
-    <div class="compteurs">
-      <div class="compteur">
-        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'OPERATIONNEL')|list|length }}</span>
-        <span class="libelle">Opérationnels</span>
+  <div class="tableau-bord-colonnes">
+    <div>
+    <section class="carte">
+      <div class="carte-titre">
+        <h2>Tableau de bord</h2>
+        <span class="meta">{{ equipements|length }} équipement(s)</span>
       </div>
-      <div class="compteur">
-        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'DEGRADE')|list|length }}</span>
-        <span class="libelle">Dégradés</span>
-      </div>
-      <div class="compteur">
-        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'INDISPONIBLE')|list|length }}</span>
-        <span class="libelle">Indisponibles</span>
-      </div>
-      <div class="compteur">
-        <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length }}</span>
-        <span class="libelle">En attente</span>
-      </div>
-    </div>
+    </section>
 
     {% if equipements %}
       {% for groupe_nom, equips in equipements|groupby('groupe_nom') %}
-        {% if groupe_nom == '~' %}
-          <p class="sous-titre sans-groupe">Équipements non groupés</p>
-        {% else %}
-          <h3 class="sous-titre">{{ groupe_nom }}</h3>
-        {% endif %}
-        <table class="tableau">
-          <thead>
-            <tr><th>Nom</th><th>Adresse</th><th>Statut</th><th>Ajouté le</th></tr>
-          </thead>
-          <tbody>
-            {% for e in equips %}
-              <tr>
-                <td><a href="/equipements/{{ e.id }}">{{ e.nom }}</a></td>
-                <td><code>{{ e.adresse }}</code></td>
-                <td>
-                  <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'
-                                        else 'degrade' if e.statut == 'DEGRADE'
-                                        else 'ko' if e.statut == 'INDISPONIBLE'
-                                        else 'attente' }}">{{ e.statut }}</span>
-                </td>
-                <td>{{ e.date_ajout | date_fr }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        <details class="carte">
+          <summary class="resume-groupe">
+            <span>{{ 'Équipements non groupés' if groupe_nom == '~' else groupe_nom }}
+              <span class="meta">({{ equips|length }})</span>
+            </span>
+            <span class="pastilles-resume">
+              {% set n_ok = equips|selectattr('statut', 'equalto', 'OPERATIONNEL')|list|length %}
+              {% set n_degrade = equips|selectattr('statut', 'equalto', 'DEGRADE')|list|length %}
+              {% set n_ko = equips|selectattr('statut', 'equalto', 'INDISPONIBLE')|list|length %}
+              {% set n_attente = equips|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length %}
+              {% if n_ok %}<span class="pastille ok">{{ n_ok }}</span>{% endif %}
+              {% if n_degrade %}<span class="pastille degrade">{{ n_degrade }}</span>{% endif %}
+              {% if n_ko %}<span class="pastille ko">{{ n_ko }}</span>{% endif %}
+              {% if n_attente %}<span class="pastille attente">{{ n_attente }}</span>{% endif %}
+            </span>
+          </summary>
+          <table class="tableau">
+            <thead>
+              <tr><th>Nom</th><th>Adresse</th><th>Statut</th><th>Ajouté le</th></tr>
+            </thead>
+            <tbody>
+              {% for e in equips %}
+                <tr>
+                  <td><a href="/equipements/{{ e.id }}">{{ e.nom }}</a></td>
+                  <td><code>{{ e.adresse }}</code></td>
+                  <td>
+                    <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'
+                                          else 'degrade' if e.statut == 'DEGRADE'
+                                          else 'ko' if e.statut == 'INDISPONIBLE'
+                                          else 'attente' }}">{{ e.statut }}</span>
+                  </td>
+                  <td>{{ e.date_ajout | date_fr }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </details>
       {% endfor %}
     {% else %}
-      <p class="meta">Aucun équipement enregistré. Ajoutez-en depuis la page
-        <a href="/inventaire">Gestion de l'inventaire</a>.</p>
+      <section class="carte">
+        <p class="meta">Aucun équipement enregistré. Ajoutez-en depuis la page
+          <a href="/inventaire">Gestion de l'inventaire</a>.</p>
+      </section>
     {% endif %}
-  </section>
+    </div>
+
+    <section class="carte">
+      <div class="carte-titre"><h2>Santé du parc</h2></div>
+      <div class="synthese">
+        <div class="compteurs">
+          <div class="compteur">
+            <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'OPERATIONNEL')|list|length }}</span>
+            <span class="libelle">Opérationnels</span>
+          </div>
+          <div class="compteur">
+            <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'DEGRADE')|list|length }}</span>
+            <span class="libelle">Dégradés</span>
+          </div>
+          <div class="compteur">
+            <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'INDISPONIBLE')|list|length }}</span>
+            <span class="libelle">Indisponibles</span>
+          </div>
+          <div class="compteur">
+            <span class="valeur">{{ equipements|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length }}</span>
+            <span class="libelle">En attente</span>
+          </div>
+        </div>
+
+        {% if equipements %}
+          <div class="camembert">
+            <canvas id="camembert-statuts"></canvas>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+{% if equipements %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+  new Chart(document.getElementById("camembert-statuts"), {
+    type: "pie",
+    data: {
+      labels: ["Opérationnel", "Dégradé", "Indisponible", "En attente"],
+      datasets: [{
+        data: [
+          {{ equipements|selectattr('statut', 'equalto', 'OPERATIONNEL')|list|length }},
+          {{ equipements|selectattr('statut', 'equalto', 'DEGRADE')|list|length }},
+          {{ equipements|selectattr('statut', 'equalto', 'INDISPONIBLE')|list|length }},
+          {{ equipements|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length }}
+        ],
+        // Mêmes couleurs que les pastilles de statut, pour rester cohérent avec le reste de la page.
+        backgroundColor: ["#2E7D32", "#E08E00", "#C62828", "#5B6676"],
+        borderColor: "#FFFFFF",
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      animation: false,
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
+    },
+  });
+</script>
+{% endif %}
 {% endblock %}

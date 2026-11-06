@@ -261,23 +261,59 @@ def basculer_visibilite_interface(interface_id: int) -> int | None:
         return ligne["equipement_id"]
 
 
-def lister_changements_statut(equipement_id: int, limite: int = 20) -> list[sqlite3.Row]:
-    """Historique des changements de statut d'un équipement, le plus récent en premier."""
-    with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT * FROM changement_statut WHERE equipement_id = ? "
-            "ORDER BY horodatage DESC LIMIT ?",
-            (equipement_id, limite),
-        ).fetchall()
+def _filtre_logs(equipement_id: int | None, depuis: str | None,
+                  jusqu_a: str | None) -> tuple[str, list]:
+    """Construit la clause WHERE commune aux deux tables de logs, et ses paramètres.
+    Utilisée à la fois pour compter et pour lister, afin que les deux restent cohérents."""
+    condition = "1 = 1"
+    parametres: list = []
+    if equipement_id is not None:
+        condition += " AND equipement_id = ?"
+        parametres.append(equipement_id)
+    if depuis:
+        condition += " AND horodatage >= ?"
+        parametres.append(depuis)
+    if jusqu_a:
+        condition += " AND horodatage <= ?"
+        parametres.append(jusqu_a)
+    return condition, parametres
 
 
-def lister_erreurs_collecte(equipement_id: int, limite: int = 20) -> list[sqlite3.Row]:
-    """Dernières erreurs de collecte d'un équipement, la plus récente en premier."""
+def compter_logs(equipement_id: int | None = None, depuis: str | None = None,
+                  jusqu_a: str | None = None) -> int:
+    """Nombre total de logs correspondant aux filtres (pour la pagination)."""
+    condition, parametres = _filtre_logs(equipement_id, depuis, jusqu_a)
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT * FROM erreur_collecte WHERE equipement_id = ? "
-            "ORDER BY horodatage DESC LIMIT ?",
-            (equipement_id, limite),
+            "SELECT (SELECT COUNT(*) FROM changement_statut WHERE " + condition + ") + "
+            "       (SELECT COUNT(*) FROM erreur_collecte WHERE " + condition + ") AS total",
+            parametres + parametres,
+        ).fetchone()["total"]
+
+
+def lister_logs(equipement_id: int | None = None, depuis: str | None = None,
+                 jusqu_a: str | None = None, limite: int = 50, decalage: int = 0) -> list[sqlite3.Row]:
+    """Historique unifié (changements de statut + erreurs de collecte), le plus récent
+    en premier, filtrable par équipement et par plage de dates, et paginé (limite/décalage).
+    Chaque ligne porte un type_log ('CHANGEMENT_STATUT' ou 'ERREUR_COLLECTE') pour les
+    distinguer à l'affichage."""
+    condition, parametres = _filtre_logs(equipement_id, depuis, jusqu_a)
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT equipement.id AS equipement_id, equipement.nom AS equipement_nom, "
+            "sous_requete.horodatage, sous_requete.type_log, sous_requete.detail "
+            "FROM ("
+            "   SELECT equipement_id, horodatage, 'CHANGEMENT_STATUT' AS type_log, "
+            "          (ancien_statut || ' -> ' || nouveau_statut) AS detail "
+            "   FROM changement_statut WHERE " + condition + " "
+            "   UNION ALL "
+            "   SELECT equipement_id, horodatage, 'ERREUR_COLLECTE' AS type_log, "
+            "          (type_erreur || COALESCE(' : ' || message, '')) AS detail "
+            "   FROM erreur_collecte WHERE " + condition +
+            ") AS sous_requete "
+            "JOIN equipement ON equipement.id = sous_requete.equipement_id "
+            "ORDER BY sous_requete.horodatage DESC LIMIT ? OFFSET ?",
+            parametres + parametres + [limite, decalage],
         ).fetchall()
 
 

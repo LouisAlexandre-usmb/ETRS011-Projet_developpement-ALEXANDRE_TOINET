@@ -19,7 +19,7 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 ## 🚧 Statut du projet
  
-Le socle applicatif est fonctionnel : inventaire des équipements (avec groupes et plusieurs modèles de supervision sélectionnables), collecte SNMP automatique et périodique, tableau de bord, et fiche détaillée par équipement (statut, interfaces activables/désactivables, historique, graphiques avec plage de dates réglable). La durée de conservation des mesures est réglable par équipement (30 jours maximum, purgées automatiquement). Les seuils et les alertes restent à implémenter.
+Le socle applicatif est fonctionnel : inventaire des équipements (avec groupes et plusieurs modèles de supervision sélectionnables), collecte SNMP automatique et périodique, tableau de bord (regroupement par groupe, répartition des statuts), fiche détaillée par équipement (identité, interfaces activables/désactivables, graphiques avec plage de dates réglable, paramètres de collecte), et une page Logs centralisant l'historique des statuts et des erreurs de collecte, filtrable par équipement et par période. La durée de conservation des mesures est réglable par équipement (30 jours maximum, purgées automatiquement). Les seuils et les alertes restent à implémenter.
 
 ### ▶️ Lancement
 

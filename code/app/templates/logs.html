@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block titre %}Logs · Supervision SNMP{% endblock %}
+
+{% macro pagination_logs() %}
+  {% if nb_pages > 1 %}
+    <div class="pagination">
+      {% if page > 1 %}
+        <a class="bouton-discret" href="/logs?{{ filtre_qs }}{{ '&' if filtre_qs }}page={{ page - 1 }}">&larr; Précédent</a>
+      {% endif %}
+      <span class="meta">Page {{ page }} / {{ nb_pages }}</span>
+      {% if page < nb_pages %}
+        <a class="bouton-discret" href="/logs?{{ filtre_qs }}{{ '&' if filtre_qs }}page={{ page + 1 }}">Suivant &rarr;</a>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% block contenu %}
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Logs</h2>
+      <span class="meta">{{ total_logs }} ligne(s) au total</span>
+    </div>
+
+    <form method="get" action="/logs" class="formulaire formulaire-ligne">
+      <label>Équipement
+        <select name="equipement_id">
+          <option value="">Tous</option>
+          {% for e in equipements %}
+            <option value="{{ e.id }}" {{ 'selected' if equipement_id_filtre == e.id }}>{{ e.nom }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Depuis
+        <input type="date" name="depuis" value="{{ depuis_filtre or '' }}">
+      </label>
+      <label>Jusqu'à
+        <input type="date" name="jusqu_a" value="{{ jusqu_a_filtre or '' }}">
+      </label>
+      <button type="submit">Filtrer</button>
+      {% if equipement_id_filtre or depuis_filtre or jusqu_a_filtre %}
+        <a href="/logs" class="bouton-discret">Réinitialiser</a>
+      {% endif %}
+    </form>
+
+    {{ pagination_logs() }}
+
+    <table class="tableau">
+      <thead><tr><th>Date</th><th>Équipement</th><th>Type</th><th>Détail</th></tr></thead>
+      <tbody>
+        {% for ligne in logs %}
+          <tr>
+            <td>{{ ligne.horodatage | date_fr }}</td>
+            <td><a href="/equipements/{{ ligne.equipement_id }}">{{ ligne.equipement_nom }}</a></td>
+            <td>
+              <span class="pastille {{ 'type-erreur' if ligne.type_log == 'ERREUR_COLLECTE' else 'type-statut' }}">
+                {{ 'Erreur' if ligne.type_log == 'ERREUR_COLLECTE' else 'Statut' }}
+              </span>
+            </td>
+            <td>{{ ligne.detail }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="meta">Aucun log pour ces critères.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {{ pagination_logs() }}
+  </section>
+{% endblock %}
