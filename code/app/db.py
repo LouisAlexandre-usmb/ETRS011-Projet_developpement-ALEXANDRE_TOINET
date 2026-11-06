@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS parametres_generaux (
     intervalle_polling_defaut       INTEGER NOT NULL DEFAULT 60,
     nb_echecs_avant_indisponibilite INTEGER NOT NULL DEFAULT 3,
     delai_reponse_snmp              REAL NOT NULL DEFAULT 2,
-    periode_rafraichissement        INTEGER NOT NULL DEFAULT 30,
+    periode_rafraichissement        INTEGER NOT NULL DEFAULT 10,
     duree_conservation_detail       INTEGER NOT NULL DEFAULT 7,
     duree_conservation_agregee      INTEGER NOT NULL DEFAULT 365
 );
@@ -134,8 +134,7 @@ CREATE TABLE IF NOT EXISTS erreur_collecte (
 CREATE TABLE IF NOT EXISTS seuils_config (
     metrique_id     INTEGER PRIMARY KEY REFERENCES metrique(id) ON DELETE CASCADE,
     valeur          REAL NOT NULL CHECK (valeur BETWEEN 0 AND 100),
-    valeur_critique REAL NOT NULL DEFAULT 95 CHECK (valeur_critique BETWEEN 0 AND 100),
-    actif           INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1))
+    valeur_critique REAL NOT NULL DEFAULT 95 CHECK (valeur_critique BETWEEN 0 AND 100)
 );
 
 -- Seuils propres à un équipement : ils remplacent le réglage global pour ce service.
@@ -144,7 +143,6 @@ CREATE TABLE IF NOT EXISTS seuil_equipement (
     metrique_id     INTEGER NOT NULL REFERENCES metrique(id) ON DELETE CASCADE,
     valeur          REAL NOT NULL CHECK (valeur BETWEEN 0 AND 100),
     valeur_critique REAL NOT NULL CHECK (valeur_critique BETWEEN 0 AND 100),
-    actif           INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     PRIMARY KEY (equipement_id, metrique_id)
 );
 
@@ -229,6 +227,11 @@ def _migrer(connexion: sqlite3.Connection) -> None:
             "CHECK (criticite IN ('AVERTISSEMENT', 'CRITIQUE'))"
         )
         connexion.execute("UPDATE alerte SET criticite = 'CRITIQUE' WHERE code IN ('INJOIGNABLE', 'SNMP_EN_ECHEC')")
+    # Un seuil propre décoché revient désormais au réglage global : il n'a plus lieu d'exister
+    if "actif" in {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(seuil_equipement)")}:
+        connexion.execute("DELETE FROM seuil_equipement WHERE actif = 0")
+    # Ancienne valeur par défaut, trop lente pour suivre les alertes (aucun écran ne la modifie)
+    connexion.execute("UPDATE parametres_generaux SET periode_rafraichissement = 10 WHERE periode_rafraichissement = 30")
     if "visible" in colonnes:  # ancienne colonne de masquage : sa décision est reprise une fois
         connexion.execute("UPDATE interface SET suivi = 'NON', visible = 1 WHERE visible = 0")
 
@@ -479,7 +482,7 @@ def lister_changements_statut(equipement_id: int, limite: int = 20) -> list[sqli
     with get_connection() as connexion:
         return connexion.execute(
             "SELECT * FROM changement_statut WHERE equipement_id = ? "
-            "ORDER BY horodatage DESC LIMIT ?",
+            "ORDER BY horodatage DESC, id DESC LIMIT ?",
             (equipement_id, limite),
         ).fetchall()
 
@@ -723,6 +726,31 @@ def enregistrer_echec_collecte(equipement_id: int, seuil_echecs: int, statut: st
         return nouveaux_echecs
 
 
+def derniere_valeur(equipement_id: int, metrique_id: int) -> float | None:
+    """Dernier relevé d'un indicateur ; None s'il n'y en a pas ou si le dernier a échoué."""
+    with get_connection() as connexion:
+        ligne = connexion.execute(
+            "SELECT valeur FROM mesure WHERE equipement_id = ? AND metrique_id = ? ORDER BY id DESC LIMIT 1",
+            (equipement_id, metrique_id),
+        ).fetchone()
+    return ligne["valeur"] if ligne else None
+
+
+def actualiser_statut_service(equipement_id: int) -> None:
+    """Fait suivre au statut d'un équipement joignable ses alertes de service encore actives."""
+    with get_connection() as connexion:
+        ancien_statut = connexion.execute(
+            "SELECT statut FROM equipement WHERE id = ?", (equipement_id,)
+        ).fetchone()["statut"]
+        degrade = connexion.execute(
+            "SELECT 1 FROM alerte WHERE equipement_id = ? AND statut = 'ACTIVE' AND categorie = 'SERVICE' LIMIT 1",
+            (equipement_id,),
+        ).fetchone() is not None
+        statut = "DEGRADE" if degrade else "OPERATIONNEL"
+        if ancien_statut in ("OPERATIONNEL", "DEGRADE") and ancien_statut != statut:
+            _changer_statut(connexion, equipement_id, ancien_statut, statut)
+
+
 def releve_en_echec_persistant(equipement_id: int, metrique_id: int, nb_releves: int) -> bool:
     """Vrai si un indicateur déjà relevé par le passé échoue depuis nb_releves collectes. Un
     indicateur que l'équipement n'a jamais fourni n'est pas une panne : il n'est pas supporté."""
@@ -745,7 +773,8 @@ def lister_seuils() -> list[sqlite3.Row]:
     """Renvoie les seuils configurés, avec le code et le libellé de leur métrique."""
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT seuils_config.*, metrique.code, metrique.libelle, "
+            "SELECT seuils_config.metrique_id, seuils_config.valeur, seuils_config.valeur_critique, "
+            "metrique.code, metrique.libelle, "
             "(SELECT count(*) FROM seuil_equipement WHERE seuil_equipement.metrique_id = seuils_config.metrique_id) "
             "AS nb_personnalises "
             "FROM seuils_config JOIN metrique ON metrique.id = seuils_config.metrique_id "
@@ -761,7 +790,6 @@ def seuils_de_l_equipement(equipement_id: int) -> list[sqlite3.Row]:
             "SELECT seuils_config.metrique_id, metrique.code, metrique.libelle, "
             "COALESCE(propre.valeur, seuils_config.valeur) AS valeur, "
             "COALESCE(propre.valeur_critique, seuils_config.valeur_critique) AS valeur_critique, "
-            "COALESCE(propre.actif, seuils_config.actif) AS actif, "
             "propre.equipement_id IS NOT NULL AS personnalise "
             "FROM equipement "
             "JOIN element_surveille ON element_surveille.modele_supervision_id = equipement.modele_supervision_id "
@@ -776,14 +804,14 @@ def seuils_de_l_equipement(equipement_id: int) -> list[sqlite3.Row]:
 
 
 def enregistrer_seuil_equipement(equipement_id: int, metrique_id: int, valeur: float,
-                                  valeur_critique: float, actif: bool) -> None:
+                                  valeur_critique: float) -> None:
     """Crée ou met à jour le seuil propre à un équipement pour un service."""
     with get_connection() as connexion:
         connexion.execute(
-            "INSERT INTO seuil_equipement (equipement_id, metrique_id, valeur, valeur_critique, actif) "
-            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (equipement_id, metrique_id) DO UPDATE SET "
-            "valeur = excluded.valeur, valeur_critique = excluded.valeur_critique, actif = excluded.actif",
-            (equipement_id, metrique_id, valeur, valeur_critique, int(actif)),
+            "INSERT INTO seuil_equipement (equipement_id, metrique_id, valeur, valeur_critique) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (equipement_id, metrique_id) DO UPDATE SET "
+            "valeur = excluded.valeur, valeur_critique = excluded.valeur_critique",
+            (equipement_id, metrique_id, valeur, valeur_critique),
         )
 
 
@@ -796,12 +824,12 @@ def supprimer_seuil_equipement(equipement_id: int, metrique_id: int) -> None:
         )
 
 
-def modifier_seuil(metrique_id: int, valeur: float, valeur_critique: float, actif: bool) -> bool:
-    """Met à jour les seuils d'un service ; renvoie False s'il n'existe pas."""
+def modifier_seuil(metrique_id: int, valeur: float, valeur_critique: float) -> bool:
+    """Met à jour les seuils globaux d'un service ; renvoie False s'il n'existe pas."""
     with get_connection() as connexion:
         curseur = connexion.execute(
-            "UPDATE seuils_config SET valeur = ?, valeur_critique = ?, actif = ? WHERE metrique_id = ?",
-            (valeur, valeur_critique, int(actif), metrique_id),
+            "UPDATE seuils_config SET valeur = ?, valeur_critique = ? WHERE metrique_id = ?",
+            (valeur, valeur_critique, metrique_id),
         )
         return curseur.rowcount > 0
 

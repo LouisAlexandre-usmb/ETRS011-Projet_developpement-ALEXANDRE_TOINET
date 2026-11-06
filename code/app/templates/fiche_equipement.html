@@ -15,7 +15,7 @@
   <section class="carte">
     <div class="carte-titre">
       <h2>{{ equipement.nom }}</h2>
-      <span class="pastille {{ 'ok' if equipement.statut == 'OPERATIONNEL'
+      <span id="statut-equipement" data-rafraichir class="pastille {{ 'ok' if equipement.statut == 'OPERATIONNEL'
                             else 'degrade' if equipement.statut == 'DEGRADE'
                             else 'ko' if equipement.statut == 'INDISPONIBLE'
                             else 'attente' }}">{{ equipement.statut }}</span>
@@ -46,7 +46,7 @@
     </dl>
   </section>
 
-  <section class="carte" id="alertes">
+  <section class="carte" id="alertes" data-rafraichir>
     <div class="carte-titre"><h2>Alertes actives</h2></div>
     {% include "_alertes.html" %}
     {% if historique_alertes %}
@@ -64,10 +64,10 @@
 
   <section class="carte" id="seuils">
     <div class="carte-titre"><h2>Seuils de cet équipement</h2></div>
-    <p class="meta">Un seuil enregistré ici remplace le <a href="/alertes">réglage global</a> pour ce service, sur cet équipement uniquement.</p>
+    <p class="meta">Coché, le seuil propre remplace le <a href="/alertes">réglage global</a> pour ce service, sur cet équipement uniquement. Décoché, c'est le réglage global qui s'applique.</p>
     <table class="tableau">
       <thead>
-        <tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
+        <tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Seuil propre actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
       </thead>
       <tbody>
         {% for s in seuils %}
@@ -75,13 +75,16 @@
             <td>{{ s.libelle }}</td>
             {% if utilisateur.est_admin %}
               <td><input type="number" name="valeur" min="0" max="100" step="0.1" value="{{ s.valeur }}" required
-                         aria-label="Avertissement {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
+                         aria-label="Avertissement {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"
+                         oninput="document.getElementById('propre-{{ s.metrique_id }}').checked = true"></td>
               <td><input type="number" name="valeur_critique" min="0" max="100" step="0.1" value="{{ s.valeur_critique }}" required
-                         aria-label="Critique {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
-              <td><input type="checkbox" name="actif" value="1" aria-label="{{ s.libelle }} actif"
-                         form="seuil-{{ s.metrique_id }}" {{ 'checked' if s.actif }}></td>
+                         aria-label="Critique {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"
+                         oninput="document.getElementById('propre-{{ s.metrique_id }}').checked = true"></td>
+              <td><input type="checkbox" name="actif" value="1" id="propre-{{ s.metrique_id }}"
+                         aria-label="Seuil propre actif pour {{ s.libelle }}"
+                         form="seuil-{{ s.metrique_id }}" {{ 'checked' if s.personnalise }}></td>
             {% else %}
-              <td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ 'Oui' if s.actif else 'Non' }}</td>
+              <td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ 'Oui' if s.personnalise else 'Non' }}</td>
             {% endif %}
             <td>
               {% if s.personnalise %}<span class="pastille degrade">Propre</span>
@@ -223,6 +226,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', path='rafraichir.js') }}" data-periode="{{ periode_rafraichissement() }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
   const idEquipement = {{ equipement.id }};

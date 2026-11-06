@@ -3,7 +3,7 @@
 {% block titre %}Tableau de bord · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte">
+  <section class="carte" id="tableau-de-bord" data-rafraichir>
     <div class="carte-titre">
       <h2>Tableau de bord</h2>
       <span class="meta">{{ equipements|length }} équipement(s)</span>
@@ -80,4 +80,8 @@
       </p>
     {% endif %}
   </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='rafraichir.js') }}" data-periode="{{ periode_rafraichissement() }}"></script>
 {% endblock %}

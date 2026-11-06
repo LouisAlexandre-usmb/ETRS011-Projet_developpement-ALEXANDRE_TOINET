@@ -3,7 +3,7 @@
 {% block titre %}Alertes · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte">
+  <section class="carte" id="alertes-actives" data-rafraichir>
     <div class="carte-titre">
       <h2>Alertes actives</h2>
       <span class="meta">{{ alertes|rejectattr('cause_racine_id')|list|length }}</span>
@@ -17,7 +17,7 @@
       l'alerte est un avertissement, au-dessus du second elle devient critique. Un équipement peut
       avoir ses propres seuils, réglés sur sa fiche : ils ne changent pas avec le réglage global.</p>
     <table class="tableau">
-      <thead><tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Actif</th><th>Seuils propres</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr></thead>
+      <thead><tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Seuils propres actifs</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr></thead>
       <tbody>
         {% for s in seuils %}
           <tr>
@@ -27,8 +27,6 @@
                          aria-label="Avertissement {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
               <td><input type="number" name="valeur_critique" min="0" max="100" step="0.1" value="{{ s.valeur_critique }}" required
                          aria-label="Critique {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
-              <td><input type="checkbox" name="actif" value="1" aria-label="{{ s.libelle }} actif"
-                         form="seuil-{{ s.metrique_id }}" {{ 'checked' if s.actif }}></td>
               <td>{{ s.nb_personnalises }} équipement(s)</td>
               <td>
                 <form method="post" action="/seuils" id="seuil-{{ s.metrique_id }}">
@@ -37,7 +35,7 @@
                 </form>
               </td>
             {% else %}
-              <td>{{ s.libelle }}</td><td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ 'Oui' if s.actif else 'Non' }}</td><td>{{ s.nb_personnalises }} équipement(s)</td>
+              <td>{{ s.libelle }}</td><td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ s.nb_personnalises }} équipement(s)</td>
             {% endif %}
           </tr>
         {% endfor %}
@@ -89,4 +87,8 @@
       </tbody>
     </table>
   </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='rafraichir.js') }}" data-periode="{{ periode_rafraichissement() }}"></script>
 {% endblock %}

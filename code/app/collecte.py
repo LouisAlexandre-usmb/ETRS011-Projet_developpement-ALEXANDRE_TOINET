@@ -170,6 +170,28 @@ def _appliquer_seuil(equipement: dict, element, valeur: float | None, seuils: di
         db.cloturer_alerte(equipement["id"], "SEUIL_DEPASSE", element["metrique_id"])
 
 
+def reevaluer_seuils(id_equipement: int) -> None:
+    """Applique tout de suite les seuils aux derniers relevés, sans interroger l'équipement :
+    une modification de seuil n'attend pas la collecte suivante."""
+    equipement = db.obtenir_equipement(id_equipement)
+    if equipement is None or equipement["statut"] == "INDISPONIBLE":
+        return  # aucune mesure récente à comparer
+    seuils = {seuil["metrique_id"]: seuil for seuil in db.seuils_de_l_equipement(id_equipement)}
+    for metrique_id, seuil in seuils.items():
+        _appliquer_seuil(equipement, seuil, db.derniere_valeur(id_equipement, metrique_id), seuils)
+    # Service retiré par un changement de modèle : son alerte ne serait plus jamais réévaluée
+    for alerte in db.lister_alertes(statut="ACTIVE", equipement_id=id_equipement):
+        if alerte["code"] == "SEUIL_DEPASSE" and alerte["metrique_id"] not in seuils:
+            db.cloturer_alerte(id_equipement, "SEUIL_DEPASSE", alerte["metrique_id"])
+    db.actualiser_statut_service(id_equipement)
+
+
+def reevaluer_seuils_du_parc() -> None:
+    """Réévalue tous les équipements, après une modification d'un seuil global."""
+    for equipement in db.lister_equipements():
+        reevaluer_seuils(equipement["id"])
+
+
 async def collecter_equipement(equipement: dict) -> None:
     """Collecte un équipement : test de connectivité, puis chaque indicateur de son modèle."""
     parametres = db.obtenir_parametres_generaux()
@@ -187,7 +209,7 @@ async def collecter_equipement(equipement: dict) -> None:
     db.cloturer_alerte(id_equipement, "SNMP_EN_ECHEC")
     await decouvrir_interfaces(equipement, timeout, retries)
     interfaces = db.interfaces_a_mesurer(id_equipement)
-    seuils = {seuil["metrique_id"]: seuil for seuil in db.seuils_de_l_equipement(id_equipement) if seuil["actif"]}
+    seuils = {seuil["metrique_id"]: seuil for seuil in db.seuils_de_l_equipement(id_equipement)}
 
     for element in db.lister_elements_actifs(equipement["modele_supervision_id"]):
         metrique_id = element["metrique_id"]
@@ -210,6 +232,7 @@ async def collecter_equipement(equipement: dict) -> None:
             db.enregistrer_erreur_collecte(id_equipement, "INDICATEUR_NON_SUPPORTE",
                                             f"{element['code']} : {detail}")
             db.enregistrer_mesure(id_equipement, metrique_id, None)
+            db.cloturer_alerte(id_equipement, "SEUIL_DEPASSE", metrique_id)  # valeur inconnue
             if db.releve_en_echec_persistant(id_equipement, metrique_id,
                                               parametres["nb_echecs_avant_indisponibilite"]):
                 db.ouvrir_alerte(id_equipement, "SERVICE", "RELEVE_EN_ECHEC",

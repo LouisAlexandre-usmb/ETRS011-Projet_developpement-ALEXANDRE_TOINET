@@ -70,6 +70,7 @@ def formater_date_fr(valeur: str | None) -> str:
 
 
 templates.env.filters["date_fr"] = formater_date_fr
+templates.env.globals["periode_rafraichissement"] = lambda: db.obtenir_parametres_generaux()["periode_rafraichissement"]
 
 
 class NouvelEquipement(BaseModel):
@@ -97,7 +98,6 @@ class SeuilAModifier(BaseModel):
     metrique_id: int
     valeur: float = Field(ge=0, le=100)
     valeur_critique: float = Field(ge=0, le=100)
-    actif: bool = True
 
 
 def _erreur_seuil_equipement(id_equipement: int, metrique_id: int, valeur: float,
@@ -192,12 +192,13 @@ async def page_alertes(request: Request, utilisateur: Connecte):
 
 @app.post("/seuils")
 async def modifier_seuil_html(admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
-                               valeur_critique: float = Form(...), actif: str = Form("")):
-    """Enregistre les seuils d'un service ; ils s'appliquent à la collecte suivante."""
+                               valeur_critique: float = Form(...)):
+    """Enregistre les seuils d'un service et les applique aussitôt aux dernières mesures."""
     if (not 0 <= valeur <= valeur_critique <= 100
-            or not db.modifier_seuil(metrique_id, valeur, valeur_critique, bool(actif))):
+            or not db.modifier_seuil(metrique_id, valeur, valeur_critique)):
         message = "Seuils invalides : entre 0 et 100 %, l'avertissement ne dépassant pas le niveau critique"
         return RedirectResponse(f"/alertes?erreur={quote(message)}", status_code=303)
+    collecte.reevaluer_seuils_du_parc()
     return RedirectResponse("/alertes", status_code=303)
 
 
@@ -214,11 +215,15 @@ async def enregistrer_seuil_equipement_html(
     id_equipement: int, admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
     valeur_critique: float = Form(...), actif: str = Form(""),
 ):
-    """Enregistre le seuil propre à cet équipement pour un service."""
-    erreur = _erreur_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique)
-    if erreur:
-        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#seuils", status_code=303)
-    db.enregistrer_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique, bool(actif))
+    """Enregistre le seuil propre à cet équipement pour un service ; décoché, il revient au global."""
+    if actif:
+        erreur = _erreur_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique)
+        if erreur:
+            return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#seuils", status_code=303)
+        db.enregistrer_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique)
+    else:
+        db.supprimer_seuil_equipement(id_equipement, metrique_id)
+    collecte.reevaluer_seuils(id_equipement)
     return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
 
 
@@ -226,6 +231,7 @@ async def enregistrer_seuil_equipement_html(
 async def reinitialiser_seuil_equipement_html(id_equipement: int, metrique_id: int, admin: Admin):
     """Fait revenir un service de cet équipement au réglage global."""
     db.supprimer_seuil_equipement(id_equipement, metrique_id)
+    collecte.reevaluer_seuils(id_equipement)
     return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
 
 
@@ -236,6 +242,7 @@ async def changer_modele_html(id_equipement: int, admin: Admin, modele_supervisi
     if erreur:
         return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#collecte", status_code=303)
     db.changer_modele_supervision(id_equipement, modele_supervision_id)
+    collecte.reevaluer_seuils(id_equipement)
     return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
 
 
@@ -522,13 +529,15 @@ async def seuils_equipement_api(id_equipement: int, utilisateur: Connecte):
 
 @app.post("/api/equipements/{id_equipement}/seuils")
 async def enregistrer_seuil_equipement_api(id_equipement: int, payload: SeuilEquipement, admin: Admin):
-    """Enregistre le seuil propre à cet équipement pour un service."""
-    erreur = _erreur_seuil_equipement(id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique)
-    if erreur:
-        return JSONResponse(status_code=400, content={"erreur": erreur})
-    db.enregistrer_seuil_equipement(
-        id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique, payload.actif,
-    )
+    """Enregistre le seuil propre à cet équipement pour un service ; avec actif=false, il revient au global."""
+    if payload.actif:
+        erreur = _erreur_seuil_equipement(id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique)
+        if erreur:
+            return JSONResponse(status_code=400, content={"erreur": erreur})
+        db.enregistrer_seuil_equipement(id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique)
+    else:
+        db.supprimer_seuil_equipement(id_equipement, payload.metrique_id)
+    collecte.reevaluer_seuils(id_equipement)
     return {"statut": "ok"}
 
 
@@ -536,6 +545,7 @@ async def enregistrer_seuil_equipement_api(id_equipement: int, payload: SeuilEqu
 async def supprimer_seuil_equipement_api(id_equipement: int, metrique_id: int, admin: Admin):
     """Fait revenir un service de cet équipement au réglage global."""
     db.supprimer_seuil_equipement(id_equipement, metrique_id)
+    collecte.reevaluer_seuils(id_equipement)
     return {"statut": "ok"}
 
 
@@ -544,8 +554,9 @@ async def modifier_seuil_api(payload: SeuilAModifier, admin: Admin):
     """Modifie les seuils d'un service."""
     if payload.valeur > payload.valeur_critique:
         return JSONResponse(status_code=400, content={"erreur": "L'avertissement dépasse le niveau critique"})
-    if not db.modifier_seuil(payload.metrique_id, payload.valeur, payload.valeur_critique, payload.actif):
+    if not db.modifier_seuil(payload.metrique_id, payload.valeur, payload.valeur_critique):
         return JSONResponse(status_code=404, content={"erreur": "Seuil introuvable"})
+    collecte.reevaluer_seuils_du_parc()
     return {"statut": "ok"}
 
 
