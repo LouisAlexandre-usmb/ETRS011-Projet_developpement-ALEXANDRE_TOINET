@@ -3,16 +3,49 @@
 {% block titre %}Alertes · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte" id="alertes-actives" data-rafraichir>
-    <div class="carte-titre">
+  <details class="carte" id="alertes-actives" data-rafraichir {{ 'open' if alertes|rejectattr('cause_racine_id')|list }}>
+    <summary>
       <h2>Alertes actives</h2>
-      <span class="meta">{{ alertes|rejectattr('cause_racine_id')|list|length }}</span>
-    </div>
+      {% with orange = alertes|rejectattr('cause_racine_id')|selectattr('criticite', 'equalto', 'AVERTISSEMENT')|list|length,
+              rouge = alertes|rejectattr('cause_racine_id')|selectattr('criticite', 'equalto', 'CRITIQUE')|list|length %}
+        {% include "_compteurs_etat.html" %}
+      {% endwith %}
+    </summary>
     {% include "_alertes.html" %}
-  </section>
+  </details>
 
-  <section class="carte">
-    <div class="carte-titre"><h2>Seuils et criticité par service</h2></div>
+  <details class="carte" id="parametres">
+    <summary><h2>Collecte et conservation</h2></summary>
+    <p class="meta">Valeurs globales. Un équipement ou l'un de ses services peut avoir ses propres
+      valeurs, réglées sur sa fiche : elles ne changent pas avec le réglage global. La conservation
+      s'applique aux mesures, erreurs, changements de statut et alertes clôturées, à chaque démarrage
+      puis toutes les 24 heures.</p>
+    <table class="tableau">
+      <thead><tr><th>Réglage</th><th>Valeur globale</th><th>Réglages propres actifs</th></tr></thead>
+      <tbody>
+        {% for champ, reglage in reglages.items() %}
+          <tr>
+            <td>{{ reglage[0] }}</td>
+            <td>
+              {% if utilisateur.est_admin %}
+                <input type="number" name="{{ champ }}" min="{{ reglage[2] }}" max="{{ reglage[3] }}" step="1"
+                       value="{{ parametres[reglage[1]] }}" required aria-label="{{ reglage[0] }}" form="form-parametres">
+              {% else %}{{ parametres[reglage[1]] }}{% endif %}
+            </td>
+            <td>{{ nb_reglages_propres[champ] }} équipement(s)</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if utilisateur.est_admin %}
+      <form method="post" action="/parametres" id="form-parametres" class="actions-formulaire">
+        <button type="submit">Enregistrer</button>
+      </form>
+    {% endif %}
+  </details>
+
+  <details class="carte" id="seuils-globaux">
+    <summary><h2>Seuils et criticité par service</h2></summary>
     <p class="meta">Seuils globaux, appliqués à tout le parc à chaque collecte : au-dessus du premier
       l'alerte est un avertissement, au-dessus du second elle devient critique. Un équipement peut
       avoir ses propres seuils, réglés sur sa fiche : ils ne changent pas avec le réglage global.</p>
@@ -69,10 +102,10 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </details>
 
-  <section class="carte">
-    <div class="carte-titre"><h2>Dernières alertes clôturées</h2></div>
+  <details class="carte" id="alertes-cloturees">
+    <summary><h2>Dernières alertes clôturées</h2></summary>
     <table class="tableau">
       <thead><tr><th>Équipement</th><th>Alerte</th><th>Début</th><th>Fin</th></tr></thead>
       <tbody>
@@ -86,9 +119,9 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </details>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', path='rafraichir.js') }}" data-periode="{{ periode_rafraichissement() }}"></script>
+<script src="{{ url_for('static', path='rafraichir.js') }}?v={{ version_statique() }}" data-periode="{{ periode_rafraichissement() }}"></script>
 {% endblock %}

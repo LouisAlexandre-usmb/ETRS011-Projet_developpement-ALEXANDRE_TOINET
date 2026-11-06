@@ -3,7 +3,33 @@
 {% block titre %}Tableau de bord · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte" id="tableau-de-bord" data-rafraichir>
+  <section class="carte">
+    <form method="get" action="/" class="formulaire formulaire-ligne">
+      <label>Recherche (nom ou adresse)
+        <input type="search" name="recherche" value="{{ recherche }}">
+      </label>
+      <label>Statut
+        <select name="statut">
+          <option value="">Tous</option>
+          {% for valeur, libelle in [('OPERATIONNEL', 'Opérationnel'), ('DEGRADE', 'Dégradé'), ('INDISPONIBLE', 'Indisponible'), ('EN_ATTENTE', 'En attente')] %}
+            <option value="{{ valeur }}" {{ 'selected' if statut == valeur }}>{{ libelle }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Groupe
+        <select name="groupe">
+          <option value="">Tous</option>
+          {% for g in groupes %}
+            <option value="{{ g.id }}" {{ 'selected' if groupe == g.id|string }}>{{ g.nom }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filtrer</button>
+    </form>
+  </section>
+
+  <div id="tableau-de-bord" data-rafraichir>
+  <section class="carte">
     <div class="carte-titre">
       <h2>Tableau de bord</h2>
       <span class="meta">{{ equipements|length }} équipement(s)</span>
@@ -37,51 +63,68 @@
       </div>
     </div>
 
-    {% include "_alertes.html" %}
+  </section>
 
-    {% if equipements %}
-      {% for groupe_nom, equips in equipements|groupby('groupe_nom') %}
-        {% if groupe_nom == '~' %}
-          <p class="sous-titre sans-groupe">Équipements non groupés</p>
-        {% else %}
-          <h3 class="sous-titre">{{ groupe_nom }}</h3>
-        {% endif %}
-        <table class="tableau">
-          <thead>
-            <tr><th>Nom</th><th>Adresse</th><th>Statut</th><th>Ajouté le</th></tr>
-          </thead>
-          <tbody>
-            {% for e in equips %}
-              <tr>
-                <td>
-                  <a href="/equipements/{{ e.id }}">{{ e.nom }}</a>
-                  {% if utilisateur.est_admin and e.nb_interfaces_a_valider %}
-                    <a href="/equipements/{{ e.id }}/interfaces" class="pastille degrade">{{ e.nb_interfaces_a_valider }} interface(s) à valider</a>
-                  {% endif %}
-                </td>
-                <td><code>{{ e.adresse }}</code></td>
-                <td>
-                  <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'
-                                        else 'degrade' if e.statut == 'DEGRADE'
-                                        else 'ko' if e.statut == 'INDISPONIBLE'
-                                        else 'attente' }}">{{ e.statut }}</span>
-                </td>
-                <td>{{ e.date_ajout | date_fr }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+    {% set alertes_visibles = alertes|rejectattr('cause_racine_id')|list %}
+    <details class="carte" id="alertes-tableau" {{ 'open' if alertes_visibles }}>
+      <summary>
+        <h2>Alertes actives</h2>
+        {% with orange = alertes_visibles|selectattr('criticite', 'equalto', 'AVERTISSEMENT')|list|length,
+                rouge = alertes_visibles|selectattr('criticite', 'equalto', 'CRITIQUE')|list|length %}
+          {% include "_compteurs_etat.html" %}
+        {% endwith %}
+      </summary>
+      {% include "_alertes.html" %}
+    </details>
+
+    {% if sections %}
+      {% for section in sections %}
+        <details class="carte" id="{{ section.id }}" {{ 'open' if section.ouvert }} {{ 'data-filtre' if filtre_actif }}>
+          <summary>
+            <h2>{{ section.nom }} <span class="meta">({{ section.equipements|length }})</span></h2>
+            {% with bleu = section.bleu, orange = section.orange, rouge = section.rouge %}
+              {% include "_compteurs_etat.html" %}
+            {% endwith %}
+          </summary>
+          <table class="tableau">
+            <thead>
+              <tr><th>Nom</th><th>Adresse</th><th>Statut</th><th>Ajouté le</th></tr>
+            </thead>
+            <tbody>
+              {% for e in section.equipements %}
+                <tr>
+                  <td>
+                    <a href="/equipements/{{ e.id }}">{{ e.nom }}</a>
+                    {% if utilisateur.est_admin and e.nb_interfaces_a_valider %}
+                      <a href="/equipements/{{ e.id }}/interfaces" class="pastille degrade">{{ e.nb_interfaces_a_valider }} interface(s) à valider</a>
+                    {% endif %}
+                  </td>
+                  <td><code>{{ e.adresse }}</code></td>
+                  <td>
+                    <span class="pastille {{ 'ok' if e.statut == 'OPERATIONNEL'
+                                          else 'degrade' if e.statut == 'DEGRADE'
+                                          else 'ko' if e.statut == 'INDISPONIBLE'
+                                          else 'attente' }}">{{ e.statut }}</span>
+                  </td>
+                  <td>{{ e.date_ajout | date_fr }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </details>
       {% endfor %}
+    {% elif equipements %}
+      <section class="carte"><p class="meta">Aucun équipement ne correspond à ces filtres.</p></section>
     {% else %}
-      <p class="meta">Aucun équipement enregistré.
+      <section class="carte"><p class="meta">Aucun équipement enregistré.
         {% if utilisateur.est_admin %}
           Ajoutez-en depuis la page <a href="/inventaire">Gestion de l'inventaire</a>.
         {% endif %}
-      </p>
+      </p></section>
     {% endif %}
-  </section>
+  </div>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', path='rafraichir.js') }}" data-periode="{{ periode_rafraichissement() }}"></script>
+<script src="{{ url_for('static', path='rafraichir.js') }}?v={{ version_statique() }}" data-periode="{{ periode_rafraichissement() }}"></script>
 {% endblock %}

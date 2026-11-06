@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS equipement (
     version_snmp            TEXT NOT NULL DEFAULT 'V2C' CHECK (version_snmp IN ('V1', 'V2C')),
     communaute_snmp         TEXT NOT NULL,
     intervalle_polling      INTEGER,                -- NULL = valeur globale (parametres_generaux)
+    nb_echecs_alerte        INTEGER,                -- NULL = valeur globale
+    duree_conservation      INTEGER,                -- en jours, NULL = valeur globale
     actif                   INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     statut                  TEXT NOT NULL DEFAULT 'EN_ATTENTE'
                                 CHECK (statut IN ('EN_ATTENTE', 'OPERATIONNEL', 'DEGRADE', 'INDISPONIBLE')),
@@ -146,6 +148,15 @@ CREATE TABLE IF NOT EXISTS seuil_equipement (
     PRIMARY KEY (equipement_id, metrique_id)
 );
 
+-- Réglages propres à un service d'un équipement : NULL = valeur de l'équipement.
+CREATE TABLE IF NOT EXISTS reglage_service (
+    equipement_id      INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    metrique_id        INTEGER NOT NULL REFERENCES metrique(id) ON DELETE CASCADE,
+    intervalle_polling INTEGER,
+    nb_echecs          INTEGER,
+    PRIMARY KEY (equipement_id, metrique_id)
+);
+
 -- Criticité des alertes qui ne dépendent pas d'un seuil.
 CREATE TABLE IF NOT EXISTS criticite_service (
     code      TEXT PRIMARY KEY,
@@ -211,9 +222,14 @@ def _migrer(connexion: sqlite3.Connection) -> None:
             "ALTER TABLE interface ADD COLUMN presente INTEGER NOT NULL DEFAULT 1 "
             "CHECK (presente IN (0, 1))"
         )
-    for table, colonne in (("equipement", "sys_object_id"), ("modele_supervision", "prefixe_sys_object_id")):
+    for table, colonne, type_colonne in (
+        ("equipement", "sys_object_id", "TEXT"),
+        ("modele_supervision", "prefixe_sys_object_id", "TEXT"),
+        ("equipement", "nb_echecs_alerte", "INTEGER"),
+        ("equipement", "duree_conservation", "INTEGER"),
+    ):
         if colonne not in {ligne["name"] for ligne in connexion.execute(f"PRAGMA table_info({table})")}:
-            connexion.execute(f"ALTER TABLE {table} ADD COLUMN {colonne} TEXT")
+            connexion.execute(f"ALTER TABLE {table} ADD COLUMN {colonne} {type_colonne}")
     if "valeur_critique" not in {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(seuils_config)")}:
         connexion.execute(
             "ALTER TABLE seuils_config ADD COLUMN valeur_critique REAL NOT NULL DEFAULT 95 "
@@ -369,13 +385,103 @@ def creer_equipement(nom: str, adresse: str, communaute_snmp: str,
         return curseur.lastrowid
 
 
-def modifier_intervalle_polling(id_equipement: int, intervalle_polling: int | None) -> None:
-    """Change l'intervalle de polling d'un équipement (None = valeur par défaut)."""
+REGLAGES_EQUIPEMENT = ("intervalle_polling", "nb_echecs_alerte", "duree_conservation")
+
+
+def modifier_reglage_equipement(id_equipement: int, champ: str, valeur: int | None) -> None:
+    """Change un réglage propre à un équipement (None = retour à la valeur globale)."""
+    if champ not in REGLAGES_EQUIPEMENT:  # le nom de colonne ne peut pas être passé en paramètre SQL
+        raise ValueError(champ)
+    with get_connection() as connexion:
+        connexion.execute(f"UPDATE equipement SET {champ} = ? WHERE id = ?", (valeur, id_equipement))
+
+
+def services_de_l_equipement(equipement_id: int) -> list[sqlite3.Row]:
+    """Services surveillés par un équipement (ceux de son modèle), avec leurs réglages propres."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT metrique.id AS metrique_id, metrique.code, metrique.libelle, "
+            "reglage.intervalle_polling, reglage.nb_echecs, reglage.equipement_id IS NOT NULL AS personnalise "
+            "FROM equipement "
+            "JOIN element_surveille ON element_surveille.modele_supervision_id = equipement.modele_supervision_id "
+            " AND element_surveille.actif = 1 "
+            "JOIN metrique ON metrique.id = element_surveille.metrique_id "
+            "LEFT JOIN reglage_service AS reglage ON reglage.equipement_id = equipement.id "
+            " AND reglage.metrique_id = metrique.id "
+            "WHERE equipement.id = ? ORDER BY metrique.libelle",
+            (equipement_id,),
+        ).fetchall()
+
+
+def enregistrer_reglage_service(equipement_id: int, metrique_id: int, intervalle_polling: int | None,
+                                 nb_echecs: int | None) -> None:
+    """Crée ou met à jour les réglages propres à un service d'un équipement."""
     with get_connection() as connexion:
         connexion.execute(
-            "UPDATE equipement SET intervalle_polling = ? WHERE id = ?",
-            (intervalle_polling, id_equipement),
+            "INSERT INTO reglage_service (equipement_id, metrique_id, intervalle_polling, nb_echecs) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (equipement_id, metrique_id) DO UPDATE SET "
+            "intervalle_polling = excluded.intervalle_polling, nb_echecs = excluded.nb_echecs",
+            (equipement_id, metrique_id, intervalle_polling, nb_echecs),
         )
+
+
+def supprimer_reglage_service(equipement_id: int, metrique_id: int) -> None:
+    """Fait revenir un service aux réglages de son équipement."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "DELETE FROM reglage_service WHERE equipement_id = ? AND metrique_id = ?",
+            (equipement_id, metrique_id),
+        )
+
+
+def modifier_parametres(intervalle_polling: int, nb_echecs: int, duree_conservation: int) -> None:
+    """Met à jour les réglages globaux de collecte et de conservation."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE parametres_generaux SET intervalle_polling_defaut = ?, "
+            "nb_echecs_avant_indisponibilite = ?, duree_conservation_detail = ? WHERE id = 1",
+            (intervalle_polling, nb_echecs, duree_conservation),
+        )
+
+
+def compter_reglages_propres() -> dict[str, int]:
+    """Nombre d'équipements qui ont un réglage propre, à leur niveau ou sur l'un de leurs services."""
+    with get_connection() as connexion:
+        return {
+            "intervalle_polling": connexion.execute(
+                "SELECT count(*) FROM equipement WHERE intervalle_polling IS NOT NULL OR id IN "
+                "(SELECT equipement_id FROM reglage_service WHERE intervalle_polling IS NOT NULL)"
+            ).fetchone()[0],
+            "nb_echecs_alerte": connexion.execute(
+                "SELECT count(*) FROM equipement WHERE nb_echecs_alerte IS NOT NULL OR id IN "
+                "(SELECT equipement_id FROM reglage_service WHERE nb_echecs IS NOT NULL)"
+            ).fetchone()[0],
+            "duree_conservation": connexion.execute(
+                "SELECT count(*) FROM equipement WHERE duree_conservation IS NOT NULL"
+            ).fetchone()[0],
+        }
+
+
+def purger_donnees_anciennes() -> int:
+    """Supprime mesures, erreurs, changements de statut et alertes clôturées plus anciens que la
+    durée de conservation de chaque équipement (la sienne, sinon la globale). Une alerte encore
+    active n'est jamais supprimée. Renvoie le nombre de lignes supprimées."""
+    limite = "strftime('%Y-%m-%dT%H:%M:%S', 'now', '-' || ? || ' days')"
+    total = 0
+    with get_connection() as connexion:
+        defaut = connexion.execute(
+            "SELECT duree_conservation_detail FROM parametres_generaux WHERE id = 1"
+        ).fetchone()[0]
+        for equipement in connexion.execute("SELECT id, duree_conservation FROM equipement").fetchall():
+            duree = equipement["duree_conservation"] or defaut
+            for requete in (
+                f"DELETE FROM mesure WHERE equipement_id = ? AND horodatage < {limite}",
+                f"DELETE FROM erreur_collecte WHERE equipement_id = ? AND horodatage < {limite}",
+                f"DELETE FROM changement_statut WHERE equipement_id = ? AND horodatage < {limite}",
+                f"DELETE FROM alerte WHERE equipement_id = ? AND statut = 'CLOTUREE' AND date_fin < {limite}",
+            ):
+                total += connexion.execute(requete, (equipement["id"], duree)).rowcount
+    return total
 
 
 def changer_modele_supervision(id_equipement: int, modele_supervision_id: int) -> None:
@@ -591,9 +697,18 @@ def trouver_modele_pour(sys_object_id: str | None) -> int:
 # ---------------------------------------------------------------- groupes
 
 def lister_groupes() -> list[sqlite3.Row]:
-    """Renvoie tous les groupes, triés par nom."""
+    """Renvoie tous les groupes, triés par nom, avec leur nombre d'équipements."""
     with get_connection() as connexion:
-        return connexion.execute("SELECT * FROM groupe ORDER BY nom").fetchall()
+        return connexion.execute(
+            "SELECT groupe.*, (SELECT count(*) FROM equipement WHERE equipement.groupe_id = groupe.id) "
+            "AS nb_equipements FROM groupe ORDER BY nom"
+        ).fetchall()
+
+
+def supprimer_groupe(id_groupe: int) -> bool:
+    """Supprime un groupe ; ses équipements restent, sans groupe. Renvoie False s'il n'existe pas."""
+    with get_connection() as connexion:
+        return connexion.execute("DELETE FROM groupe WHERE id = ?", (id_groupe,)).rowcount > 0
 
 
 def creer_groupe(nom: str) -> int:
@@ -950,5 +1065,34 @@ def lister_alertes(statut: str | None = None, equipement_id: int | None = None,
             "LEFT JOIN equipement AS racine_eq ON racine_eq.id = racine.equipement_id "
             f"WHERE {' AND '.join(conditions)} "
             "ORDER BY alerte.criticite = 'CRITIQUE' DESC, alerte.date_debut DESC, alerte.id DESC LIMIT ?",
+            (*parametres, limite),
+        ).fetchall()
+
+
+def lister_historique(categorie: str | None = None, recherche: str | None = None,
+                       limite: int = 300) -> list[sqlite3.Row]:
+    """Changements de statut et alertes, du plus récent au plus ancien, avec filtres optionnels :
+    catégorie (STATUT, AVERTISSEMENT ou CRITIQUE) et texte (équipement, adresse ou détail)."""
+    conditions, parametres = ["1 = 1"], []
+    if categorie:
+        conditions.append("categorie = ?")
+        parametres.append(categorie)
+    if recherche:
+        # % et _ sont des jokers pour LIKE : on les échappe pour les chercher tels quels
+        motif = recherche.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions.append(
+            "(equipement_nom LIKE ? ESCAPE '\\' OR adresse LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\')"
+        )
+        parametres += [f"%{motif}%"] * 3
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM ("
+            " SELECT 'STATUT' AS categorie, c.horodatage, e.id AS equipement_id, e.nom AS equipement_nom, "
+            " e.adresse, c.ancien_statut || ' → ' || c.nouveau_statut AS detail, NULL AS date_fin "
+            " FROM changement_statut AS c JOIN equipement AS e ON e.id = c.equipement_id "
+            " UNION ALL "
+            " SELECT a.criticite, a.date_debut, e.id, e.nom, e.adresse, a.message, a.date_fin "
+            " FROM alerte AS a JOIN equipement AS e ON e.id = a.equipement_id"
+            f") WHERE {' AND '.join(conditions)} ORDER BY horodatage DESC LIMIT ?",
             (*parametres, limite),
         ).fetchall()

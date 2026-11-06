@@ -20,7 +20,13 @@
     const page = new DOMParser().parseFromString(await reponse.text(), "text/html");
     document.querySelectorAll("[data-rafraichir]").forEach((zone) => {
       const nouvelle = page.getElementById(zone.id);
-      if (nouvelle && nouvelle.outerHTML !== zone.outerHTML) {
+      if (!nouvelle) return;
+      // Le serveur ne connaît pas les blocs dépliés par l'utilisateur : on reporte leur état
+      [zone, ...zone.querySelectorAll("details[id]")].forEach((bloc) => {
+        const equivalent = bloc.id === zone.id ? nouvelle : nouvelle.querySelector("#" + CSS.escape(bloc.id));
+        if (bloc.tagName === "DETAILS" && equivalent) equivalent.open = bloc.open;
+      });
+      if (nouvelle.outerHTML !== zone.outerHTML) {
         zone.replaceWith(document.importNode(nouvelle, true));
       }
     });

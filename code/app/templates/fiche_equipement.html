@@ -46,8 +46,14 @@
     </dl>
   </section>
 
-  <section class="carte" id="alertes" data-rafraichir>
-    <div class="carte-titre"><h2>Alertes actives</h2></div>
+  <details class="carte" id="alertes" data-rafraichir {{ 'open' if alertes }}>
+    <summary>
+      <h2>Alertes actives</h2>
+      {% with orange = alertes|selectattr('criticite', 'equalto', 'AVERTISSEMENT')|list|length,
+              rouge = alertes|selectattr('criticite', 'equalto', 'CRITIQUE')|list|length %}
+        {% include "_compteurs_etat.html" %}
+      {% endwith %}
+    </summary>
     {% include "_alertes.html" %}
     {% if historique_alertes %}
       <h3 class="sous-titre">Alertes clôturées</h3>
@@ -60,10 +66,10 @@
         </tbody>
       </table>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="carte" id="seuils">
-    <div class="carte-titre"><h2>Seuils de cet équipement</h2></div>
+  <details class="carte" id="seuils">
+    <summary><h2>Seuils de cet équipement</h2></summary>
     <p class="meta">Coché, le seuil propre remplace le <a href="/alertes">réglage global</a> pour ce service, sur cet équipement uniquement. Décoché, c'est le réglage global qui s'applique.</p>
     <table class="tableau">
       <thead>
@@ -109,25 +115,92 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </details>
 
-  <section class="carte" id="collecte">
-    <div class="carte-titre"><h2>Collecte</h2></div>
-    <p class="meta">
-      Intervalle effectif actuel :
-      {{ equipement.intervalle_polling or parametres.intervalle_polling_defaut }} s
-      {% if not equipement.intervalle_polling %}(valeur par défaut){% endif %}
-    </p>
+  <details class="carte" id="reglages">
+    <summary><h2>Réglages de cet équipement</h2></summary>
+    <p class="meta">Coché, le réglage propre remplace la <a href="/alertes#parametres">valeur globale</a> pour cet équipement uniquement. Décoché, c'est la valeur globale qui s'applique.</p>
+    <table class="tableau">
+      <thead>
+        <tr><th>Réglage</th><th>Valeur</th><th>Réglage propre actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
+      </thead>
+      <tbody>
+        {% for champ, reglage in reglages.items() %}
+          {% set propre = equipement[champ] %}
+          <tr>
+            <td>{{ reglage[0] }}</td>
+            {% if utilisateur.est_admin %}
+              <td><input type="number" name="valeur" min="{{ reglage[2] }}" max="{{ reglage[3] }}" step="1"
+                         value="{{ propre or parametres[reglage[1]] }}" aria-label="{{ reglage[0] }}" form="reglage-{{ champ }}"
+                         oninput="document.getElementById('propre-{{ champ }}').checked = true"></td>
+              <td><input type="checkbox" name="actif" value="1" id="propre-{{ champ }}" aria-label="Réglage propre actif : {{ reglage[0] }}"
+                         form="reglage-{{ champ }}" {{ 'checked' if propre }}></td>
+            {% else %}
+              <td>{{ propre or parametres[reglage[1]] }}</td><td>{{ 'Oui' if propre else 'Non' }}</td>
+            {% endif %}
+            <td>
+              {% if propre %}<span class="pastille degrade">Propre</span>
+              {% else %}<span class="pastille attente">Global</span>{% endif %}
+            </td>
+            {% if utilisateur.est_admin %}
+              <td>
+                <form method="post" action="/equipements/{{ equipement.id }}/reglages" id="reglage-{{ champ }}">
+                  <input type="hidden" name="champ" value="{{ champ }}">
+                  <button type="submit">Enregistrer</button>
+                </form>
+              </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3 class="sous-titre">Réglages par service</h3>
+    <p class="meta">Champ vide ou case décochée : le service suit les réglages de l'équipement. La disponibilité de l'équipement reste testée selon son propre intervalle.</p>
+    <table class="tableau">
+      <thead>
+        <tr><th>Service</th><th>Intervalle (s)</th><th>Échecs avant alerte</th><th>Réglage propre actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
+      </thead>
+      <tbody>
+        {% for s in services %}
+          <tr>
+            <td>{{ s.libelle }}</td>
+            {% if utilisateur.est_admin %}
+              <td><input type="number" name="intervalle_polling" min="{{ reglages.intervalle_polling[2] }}" max="{{ reglages.intervalle_polling[3] }}" step="1"
+                         value="{{ s.intervalle_polling or '' }}" placeholder="{{ equipement.intervalle_polling or parametres.intervalle_polling_defaut }}"
+                         aria-label="Intervalle {{ s.libelle }}" form="service-{{ s.metrique_id }}"
+                         oninput="document.getElementById('service-actif-{{ s.metrique_id }}').checked = true"></td>
+              <td><input type="number" name="nb_echecs" min="{{ reglages.nb_echecs_alerte[2] }}" max="{{ reglages.nb_echecs_alerte[3] }}" step="1"
+                         value="{{ s.nb_echecs or '' }}" placeholder="{{ equipement.nb_echecs_alerte or parametres.nb_echecs_avant_indisponibilite }}"
+                         aria-label="Échecs avant alerte {{ s.libelle }}" form="service-{{ s.metrique_id }}"
+                         oninput="document.getElementById('service-actif-{{ s.metrique_id }}').checked = true"></td>
+              <td><input type="checkbox" name="actif" value="1" id="service-actif-{{ s.metrique_id }}" aria-label="Réglage propre actif : {{ s.libelle }}"
+                         form="service-{{ s.metrique_id }}" {{ 'checked' if s.personnalise }}></td>
+            {% else %}
+              <td>{{ s.intervalle_polling or equipement.intervalle_polling or parametres.intervalle_polling_defaut }}</td>
+              <td>{{ s.nb_echecs or equipement.nb_echecs_alerte or parametres.nb_echecs_avant_indisponibilite }}</td>
+              <td>{{ 'Oui' if s.personnalise else 'Non' }}</td>
+            {% endif %}
+            <td>
+              {% if s.personnalise %}<span class="pastille degrade">Propre</span>
+              {% else %}<span class="pastille attente">Équipement</span>{% endif %}
+            </td>
+            {% if utilisateur.est_admin %}
+              <td>
+                <form method="post" action="/equipements/{{ equipement.id }}/services/{{ s.metrique_id }}" id="service-{{ s.metrique_id }}">
+                  <button type="submit">Enregistrer</button>
+                </form>
+              </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+
+  <details class="carte" id="collecte">
+    <summary><h2>Collecte</h2></summary>
     {% if utilisateur.est_admin %}
-    <form method="post" action="/equipements/{{ equipement.id }}/intervalle-polling"
-          class="formulaire formulaire-ligne">
-      <label>Intervalle de polling, en secondes (vide = valeur par défaut, {{ parametres.intervalle_polling_defaut }} s)
-        <input type="number" name="intervalle_polling" min="1"
-               value="{{ equipement.intervalle_polling or '' }}"
-               placeholder="{{ parametres.intervalle_polling_defaut }}">
-      </label>
-      <button type="submit">Enregistrer</button>
-    </form>
     <form method="post" action="/equipements/{{ equipement.id }}/modele" class="formulaire formulaire-ligne">
       <label>Modèle de supervision
         <select name="modele_supervision_id">
@@ -139,10 +212,10 @@
       <button type="submit">Changer de modèle</button>
     </form>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="carte">
-    <div class="carte-titre"><h2>Mesures</h2></div>
+  <details class="carte" id="mesures" open>
+    <summary><h2>Mesures</h2></summary>
     <div class="graphiques">
       <div><canvas id="graphique-cpu"></canvas></div>
       <div><canvas id="graphique-ram"></canvas></div>
@@ -159,16 +232,14 @@
       </div>
     </div>
     <p class="meta">Débit calculé par différence entre deux relevés des compteurs. Une interruption de collecte ou une remise à zéro apparaît comme un trou dans la courbe.</p>
-  </section>
+  </details>
 
-  <section class="carte" id="interfaces">
-    <div class="carte-titre">
-      <h2>Interfaces surveillées</h2>
+  <details class="carte" id="interfaces">
+    <summary><h2>Interfaces surveillées</h2>
       <span class="meta">
         {{ interfaces|length }}
         {% if utilisateur.est_admin %}· <a href="/equipements/{{ equipement.id }}/interfaces">Gérer</a>{% endif %}
-      </span>
-    </div>
+      </span></summary>
     <table class="tableau">
       <thead><tr><th>Nom</th><th>Statut</th><th>Vitesse</th></tr></thead>
       <tbody>
@@ -193,11 +264,11 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </details>
 
 
-  <section class="carte">
-    <div class="carte-titre"><h2>Historique des statuts</h2></div>
+  <details class="carte" id="historique-statuts">
+    <summary><h2>Historique des statuts</h2></summary>
     <table class="tableau">
       <thead><tr><th>Date</th><th>Ancien statut</th><th>Nouveau statut</th></tr></thead>
       <tbody>
@@ -208,10 +279,10 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </details>
 
-  <section class="carte">
-    <div class="carte-titre"><h2>Erreurs de collecte</h2></div>
+  <details class="carte" id="erreurs-collecte">
+    <summary><h2>Erreurs de collecte</h2></summary>
     <table class="tableau">
       <thead><tr><th>Date</th><th>Type</th><th>Message</th></tr></thead>
       <tbody>
@@ -222,11 +293,11 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </details>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', path='rafraichir.js') }}" data-periode="{{ periode_rafraichissement() }}"></script>
+<script src="{{ url_for('static', path='rafraichir.js') }}?v={{ version_statique() }}" data-periode="{{ periode_rafraichissement() }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
   const idEquipement = {{ equipement.id }};
@@ -284,6 +355,11 @@
       options: { animation: false, scales: { y: { beginAtZero: true } } },
     });
   }
+
+  // Un graphique dessiné dans un bloc replié n'a pas de taille : il faut le redimensionner à l'ouverture
+  document.getElementById("mesures").addEventListener("toggle", () => {
+    Object.values(graphiques).forEach((graphique) => graphique.resize());
+  });
 
   rafraichirCpuRamUptime();
   rafraichirTrafic();

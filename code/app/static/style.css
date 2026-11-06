@@ -51,6 +51,50 @@ body {
   margin-bottom: 1.25rem;
 }
 
+/* Blocs repliables */
+details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary > :first-child { display: flex; align-items: center; gap: .5rem; margin: 0; }
+details > summary > :first-child::before {
+  content: "▸";
+  color: var(--accent);
+  transition: transform .15s;
+}
+details[open] > summary > :first-child::before { transform: rotate(90deg); }
+details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.carte > summary h2 { font-size: 1.15rem; }
+
+/* Compteurs bleu (disponibles), orange (avertissement) et rouge (critique) */
+.compteurs-etat { display: inline-flex; gap: .35rem; flex-shrink: 0; }
+.compteur-etat {
+  min-width: 1.6rem;
+  padding: .1rem .4rem;
+  border-radius: 999px;
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 700;
+  text-align: center;
+}
+.compteur-etat.bleu { background: #1F5FA8; }
+.compteur-etat.orange { background: #B45309; }
+.compteur-etat.rouge { background: #B42318; }
+.carte > summary .meta a { color: var(--accent); }
+
+/* Largeur téléphone : l'en-tête passe à la ligne, les tableaux défilent dans leur bloc */
+.entete { flex-wrap: wrap; }
+@media (max-width: 700px) {
+  .tableau { display: block; overflow-x: auto; }
+  .navigation { flex-wrap: wrap; gap: .75rem; }
+  .version { margin-left: 0; }
+}
+
 .bandeau-info {
   background: #FBEFD9;
   color: #8A5A00;

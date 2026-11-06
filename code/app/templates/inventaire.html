@@ -3,10 +3,8 @@
 {% block titre %}Gestion de l'inventaire · Supervision SNMP{% endblock %}
 
 {% block contenu %}
-  <section class="carte">
-    <div class="carte-titre">
-      <h2>Ajouter un équipement</h2>
-    </div>
+  <details class="carte" id="ajouter" open>
+    <summary><h2>Ajouter un équipement</h2></summary>
     <form method="post" action="/equipements" class="formulaire">
       <label>Nom
         <input type="text" name="nom" required>
@@ -52,7 +50,7 @@
       </label>
       <button type="submit">Ajouter</button>
     </form>
-  </section>
+  </details>
 
   {% if equipements %}
     <datalist id="dl-equipements">
@@ -62,10 +60,8 @@
     </datalist>
   {% endif %}
 
-  <section class="carte">
-    <div class="carte-titre">
-      <h2>Modifier un équipement</h2>
-    </div>
+  <details class="carte" id="modifier" {{ 'open data-filtre' if request.query_params.get('modifier') }}>
+    <summary><h2>Modifier un équipement</h2></summary>
     {% if equipements %}
       <form method="get" action="/inventaire" class="formulaire formulaire-ligne">
         <label>Nom ou adresse
@@ -118,12 +114,10 @@
     {% else %}
       <p class="meta">Aucun équipement enregistré pour le moment.</p>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="carte">
-    <div class="carte-titre">
-      <h2>Supprimer un équipement</h2>
-    </div>
+  <details class="carte" id="supprimer">
+    <summary><h2>Supprimer un équipement</h2></summary>
     {% if equipements %}
       <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne"
             onsubmit="return confirm('Supprimer « ' + this.recherche.value + ' » et tout son historique ?')">
@@ -136,17 +130,35 @@
     {% else %}
       <p class="meta">Aucun équipement enregistré pour le moment.</p>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="carte">
-    <div class="carte-titre">
-      <h2>Créer un groupe</h2>
-    </div>
+  <details class="carte" id="groupes">
+    <summary><h2>Groupes</h2></summary>
     <form method="post" action="/groupes" class="formulaire formulaire-ligne">
       <label>Nom du groupe
         <input type="text" name="nom" required>
       </label>
       <button type="submit">Créer</button>
     </form>
-  </section>
+
+    <table class="tableau">
+      <thead><tr><th>Groupe</th><th>Équipements</th><th></th></tr></thead>
+      <tbody>
+        {% for g in groupes %}
+          <tr>
+            <td>{{ g.nom }}</td>
+            <td>{{ g.nb_equipements }}</td>
+            <td>
+              <form method="post" action="/groupes/{{ g.id }}/supprimer" data-nom="{{ g.nom }}" data-nb="{{ g.nb_equipements }}"
+                    onsubmit="return confirm('Supprimer le groupe « ' + this.dataset.nom + ' » ? Ses ' + this.dataset.nb + ' équipement(s) seront conservés, sans groupe.')">
+                <button type="submit" class="bouton-danger">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="meta">Aucun groupe pour le moment.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
 {% endblock %}

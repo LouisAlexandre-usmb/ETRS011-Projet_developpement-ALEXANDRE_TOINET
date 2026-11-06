@@ -21,9 +21,9 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 Le projet est **en cours de développement**.
 
-- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes et relations parent-enfant, modèles de supervision détectés automatiquement (générique, Cisco, Linux), tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, seuils d'avertissement et critiques par service (globaux ou propres à un équipement), alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP), corrélation des pannes par cause racine.
-- **Préparé en base, sans interface** : paramètres généraux.
-- **À réaliser** : choix de la période des graphiques, purge de l'historique, recherche et filtres, découverte de la topologie.
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes (création et suppression) et relations parent-enfant, modèles de supervision détectés automatiquement (générique, Cisco, Linux), tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, seuils d'avertissement et critiques par service (globaux ou propres à un équipement), alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP), corrélation des pannes par cause racine, onglet Historique avec recherche et filtre par catégorie, recherche et filtres du tableau de bord, intervalle de polling, échecs avant alerte et conservation des données réglables globalement, par équipement et par service (conservation : global et équipement).
+- **Préparé en base, sans interface** : délai de réponse SNMP et période de rafraîchissement.
+- **À réaliser** : choix de la période des graphiques, agrégation des données anciennes, découverte de la topologie.
 
 ### Lancer le projet
 

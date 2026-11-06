@@ -48,7 +48,8 @@ PERIODE_VERIFICATION = 5   # secondes
 _planificateur: AsyncIOScheduler | None = None
 # Échéances gardées en mémoire : derniere_collecte n'est mise à jour qu'en cas de réussite, elle
 # ferait réinterroger un équipement en panne à chaque vérification au lieu de suivre son intervalle.
-_prochaine_collecte: dict[int, float] = {}   # id équipement -> instant de la prochaine collecte
+# Clé (id équipement, id métrique) pour un service ; (id équipement, None) pour l'équipement lui-même.
+_prochaine_collecte: dict[tuple[int, int | None], float] = {}
 _en_cours: dict[int, asyncio.Task] = {}      # id équipement -> collecte en cours
 
 
@@ -59,6 +60,7 @@ def demarrer() -> None:
     _planificateur.add_job(
         verifier_echeances, "interval", seconds=PERIODE_VERIFICATION, max_instances=1, coalesce=True,
     )
+    _planificateur.add_job(db.purger_donnees_anciennes, "interval", hours=24)
     _planificateur.start()
 
 
@@ -77,27 +79,47 @@ def interface_proposee(interface) -> bool:
     return interface["statut"] == "UP" and not interface["nom"].lower().startswith(PREFIXES_VIRTUELS)
 
 
+def oublier_echeances(id_equipement: int | None = None) -> None:
+    """Après un changement d'intervalle : la prochaine vérification relance la collecte, au lieu
+    d'attendre la fin de l'ancien intervalle."""
+    for cle in list(_prochaine_collecte):
+        if id_equipement is None or cle[0] == id_equipement:
+            del _prochaine_collecte[cle]
+
+
 async def verifier_echeances() -> None:
     """Appelée périodiquement par le planificateur : démarre, chacune dans sa propre tâche, les
-    collectes dont l'intervalle de polling (le leur, ou la valeur par défaut) est écoulé. Elle
-    n'attend pas leur fin : un équipement lent ne retarde donc pas les autres."""
+    collectes dont l'intervalle de polling est écoulé (celui du service, sinon de l'équipement,
+    sinon la valeur globale). Elle n'attend pas leur fin : un équipement lent ne retarde donc
+    pas les autres."""
     parametres = db.obtenir_parametres_generaux()
     maintenant = time.monotonic()
     for equipement in db.lister_equipements_actifs():
         id_equipement = equipement["id"]
-        if id_equipement in _en_cours or maintenant < _prochaine_collecte.get(id_equipement, 0):
+        if id_equipement in _en_cours:
             continue
         intervalle = equipement["intervalle_polling"] or parametres["intervalle_polling_defaut"]
-        _prochaine_collecte[id_equipement] = maintenant + intervalle
-        tache = asyncio.create_task(_collecter_sans_interrompre(equipement))
+        services_dus = set()
+        for service in db.services_de_l_equipement(id_equipement):
+            cle = (id_equipement, service["metrique_id"])
+            if maintenant >= _prochaine_collecte.get(cle, 0):
+                services_dus.add(service["metrique_id"])
+                _prochaine_collecte[cle] = maintenant + (service["intervalle_polling"] or intervalle)
+        # La disponibilité suit l'intervalle de l'équipement, même si ses services sont espacés
+        equipement_du = maintenant >= _prochaine_collecte.get((id_equipement, None), 0)
+        if equipement_du:
+            _prochaine_collecte[(id_equipement, None)] = maintenant + intervalle
+        if not services_dus and not equipement_du:
+            continue
+        tache = asyncio.create_task(_collecter_sans_interrompre(equipement, services_dus))
         _en_cours[id_equipement] = tache
         tache.add_done_callback(lambda _, cle=id_equipement: _en_cours.pop(cle, None))
 
 
-async def _collecter_sans_interrompre(equipement: dict) -> None:
+async def _collecter_sans_interrompre(equipement: dict, services: set[int] | None = None) -> None:
     """Collecte un équipement ; une erreur imprévue est journalisée sans toucher aux autres."""
     try:
-        await collecter_equipement(equipement)
+        await collecter_equipement(equipement, services)
     except Exception:
         # Un équipement supprimé pendant sa collecte fait échouer les écritures : rien à signaler
         if db.obtenir_equipement(equipement["id"]) is not None:
@@ -125,10 +147,11 @@ async def ping(host: str, timeout: float) -> bool | None:
         return False
 
 
-async def _traiter_echec_snmp(equipement: dict, parametres, exc: Exception, timeout: float) -> None:
+async def _traiter_echec_snmp(equipement: dict, parametres, exc: Exception, timeout: float,
+                              services: set[int] | None) -> None:
     """L'agent SNMP ne répond pas : le ping distingue un équipement en panne d'un service en erreur."""
     id_equipement = equipement["id"]
-    seuil = parametres["nb_echecs_avant_indisponibilite"]
+    seuil = equipement["nb_echecs_alerte"] or parametres["nb_echecs_avant_indisponibilite"]
     joignable = await ping(equipement["adresse"], timeout)
     if joignable:
         categorie, code, statut = "SERVICE", "SNMP_EN_ECHEC", "DEGRADE"
@@ -142,6 +165,8 @@ async def _traiter_echec_snmp(equipement: dict, parametres, exc: Exception, time
     # Un relevé vide par indicateur : l'interruption apparaît comme un trou dans les courbes
     interfaces = db.interfaces_a_mesurer(id_equipement)
     for element in db.lister_elements_actifs(equipement["modele_supervision_id"]):
+        if services is not None and element["metrique_id"] not in services:
+            continue
         for interface_id in (interfaces.values() if element["par_interface"] else [None]):
             db.enregistrer_mesure(id_equipement, element["metrique_id"], None, interface_id)
 
@@ -192,8 +217,9 @@ def reevaluer_seuils_du_parc() -> None:
         reevaluer_seuils(equipement["id"])
 
 
-async def collecter_equipement(equipement: dict) -> None:
-    """Collecte un équipement : test de connectivité, puis chaque indicateur de son modèle."""
+async def collecter_equipement(equipement: dict, services: set[int] | None = None) -> None:
+    """Collecte un équipement : test de connectivité, puis les indicateurs de son modèle (seulement
+    ceux de `services` si cet ensemble est fourni)."""
     parametres = db.obtenir_parametres_generaux()
     timeout, retries = parametres["delai_reponse_snmp"], config.SNMP_RETRIES
     options = {"timeout": timeout, "retries": retries, "version": equipement["version_snmp"]}
@@ -202,16 +228,21 @@ async def collecter_equipement(equipement: dict) -> None:
     try:
         await snmp_get(equipement["adresse"], equipement["communaute_snmp"], [OID_SYS_UPTIME], **options)
     except SnmpError as exc:
-        await _traiter_echec_snmp(equipement, parametres, exc, timeout)
+        await _traiter_echec_snmp(equipement, parametres, exc, timeout, services)
         return
 
     db.cloturer_alerte(id_equipement, "INJOIGNABLE")
     db.cloturer_alerte(id_equipement, "SNMP_EN_ECHEC")
-    await decouvrir_interfaces(equipement, timeout, retries)
+    elements = [element for element in db.lister_elements_actifs(equipement["modele_supervision_id"])
+                if services is None or element["metrique_id"] in services]
+    if services is None or any(element["par_interface"] for element in elements):
+        await decouvrir_interfaces(equipement, timeout, retries)
     interfaces = db.interfaces_a_mesurer(id_equipement)
     seuils = {seuil["metrique_id"]: seuil for seuil in db.seuils_de_l_equipement(id_equipement)}
+    reglages = {service["metrique_id"]: service for service in db.services_de_l_equipement(id_equipement)}
+    echecs_equipement = equipement["nb_echecs_alerte"] or parametres["nb_echecs_avant_indisponibilite"]
 
-    for element in db.lister_elements_actifs(equipement["modele_supervision_id"]):
+    for element in elements:
         metrique_id = element["metrique_id"]
         try:
             if element["code"] == "cpu":
@@ -233,8 +264,9 @@ async def collecter_equipement(equipement: dict) -> None:
                                             f"{element['code']} : {detail}")
             db.enregistrer_mesure(id_equipement, metrique_id, None)
             db.cloturer_alerte(id_equipement, "SEUIL_DEPASSE", metrique_id)  # valeur inconnue
-            if db.releve_en_echec_persistant(id_equipement, metrique_id,
-                                              parametres["nb_echecs_avant_indisponibilite"]):
+            reglage = reglages.get(metrique_id)
+            nb_echecs = (reglage["nb_echecs"] if reglage else None) or echecs_equipement
+            if db.releve_en_echec_persistant(id_equipement, metrique_id, nb_echecs):
                 db.ouvrir_alerte(id_equipement, "SERVICE", "RELEVE_EN_ECHEC",
                                  f"Relevé SNMP en échec : {element['code']} ({detail})", metrique_id)
 

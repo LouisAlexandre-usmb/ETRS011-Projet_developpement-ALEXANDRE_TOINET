@@ -3,6 +3,7 @@
 - Pages HTML (Jinja2)  : tableau de bord, fiche équipement, alertes, inventaire, connexion
 - API JSON             : /api/...
 """
+import itertools
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
@@ -32,6 +33,7 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)  # sinon une ligne to
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    db.purger_donnees_anciennes()  # rattrape un retard pris pendant un arrêt prolongé
     collecte.demarrer()
     yield
     collecte.arreter()
@@ -69,6 +71,14 @@ def formater_date_fr(valeur: str | None) -> str:
         return valeur
 
 
+def version_statique() -> int:
+    """Date du dernier fichier statique modifié, ajoutée à leurs liens : sans elle, le navigateur
+    peut continuer d'utiliser une ancienne feuille de style gardée en cache."""
+    return max(fichier.stat().st_mtime_ns for fichier in (BASE_DIR / "static").iterdir())
+
+
+for environnement in (templates.env, auth.templates.env):  # base.html est aussi rendu par auth.py
+    environnement.globals["version_statique"] = version_statique
 templates.env.filters["date_fr"] = formater_date_fr
 templates.env.globals["periode_rafraichissement"] = lambda: db.obtenir_parametres_generaux()["periode_rafraichissement"]
 
@@ -98,6 +108,56 @@ class SeuilAModifier(BaseModel):
     metrique_id: int
     valeur: float = Field(ge=0, le=100)
     valeur_critique: float = Field(ge=0, le=100)
+
+
+# Réglage -> (libellé, colonne de la valeur globale, minimum, maximum). Le minimum de l'intervalle
+# correspond à la fréquence de vérification du planificateur (collecte.PERIODE_VERIFICATION).
+REGLAGES = {
+    "intervalle_polling": ("Intervalle de polling (secondes)", "intervalle_polling_defaut", 5, 86400),
+    "nb_echecs_alerte": ("Échecs consécutifs avant alerte", "nb_echecs_avant_indisponibilite", 1, 100),
+    "duree_conservation": ("Conservation des données (jours)", "duree_conservation_detail", 1, 3650),
+}
+
+
+def _entier_borne(texte: str, champ: str) -> int | None:
+    """Convertit une saisie de réglage ; None si elle n'est pas un entier dans les bornes."""
+    minimum, maximum = REGLAGES[champ][2:]
+    texte = texte.strip()
+    return int(texte) if texte.isascii() and texte.isdigit() and minimum <= int(texte) <= maximum else None
+
+
+def _message_bornes(champ: str) -> str:
+    libelle, _, minimum, maximum = REGLAGES[champ]
+    return f"{libelle} : un nombre entier entre {minimum} et {maximum}"
+
+
+def _sections_tableau_de_bord(equipements: list, alertes: list, filtre_actif: bool) -> list[dict]:
+    """Prépare les blocs du tableau de bord : « Tous », puis un par groupe, chacun avec le nombre
+    d'équipements disponibles (bleu), en avertissement (orange) et critiques (rouge)."""
+    niveaux: dict[int, str] = {}
+    for alerte in alertes:
+        if alerte["criticite"] == "CRITIQUE" or alerte["equipement_id"] not in niveaux:
+            niveaux[alerte["equipement_id"]] = alerte["criticite"]
+
+    def couleur(equipement) -> str | None:
+        niveau = niveaux.get(equipement["id"])
+        if niveau:
+            return "rouge" if niveau == "CRITIQUE" else "orange"
+        return {"OPERATIONNEL": "bleu", "DEGRADE": "orange", "INDISPONIBLE": "rouge"}.get(equipement["statut"])
+
+    def section(identifiant: str, nom: str, liste: list) -> dict:
+        couleurs = [couleur(equipement) for equipement in liste]
+        return {
+            "id": f"groupe-{identifiant}", "nom": nom, "equipements": liste,
+            "ouvert": identifiant == "tous" or filtre_actif,
+            **{teinte: couleurs.count(teinte) for teinte in ("bleu", "orange", "rouge")},
+        }
+
+    sections = [section("tous", "Tous", equipements)]
+    # lister_equipements trie déjà par groupe, les équipements sans groupe en dernier
+    for (groupe_id, groupe_nom), liste in itertools.groupby(equipements, key=lambda e: (e["groupe_id"], e["groupe_nom"])):
+        sections.append(section(str(groupe_id or "aucun"), "Non groupés" if groupe_nom == "~" else groupe_nom, list(liste)))
+    return sections
 
 
 def _erreur_seuil_equipement(id_equipement: int, metrique_id: int, valeur: float,
@@ -141,10 +201,28 @@ async def _interroger_cible() -> tuple[dict | None, str | None]:
 @app.get("/", response_class=HTMLResponse)
 async def tableau_de_bord(request: Request, utilisateur: Connecte):
     equipements = db.lister_equipements()
+    recherche = request.query_params.get("recherche", "").strip()
+    statut = request.query_params.get("statut", "")
+    groupe = request.query_params.get("groupe", "")
+    equipements_filtres = [
+        e for e in equipements
+        if (not recherche or recherche.lower() in e["nom"].lower() or recherche.lower() in e["adresse"].lower())
+        and (not statut or e["statut"] == statut)
+        and (not groupe or str(e["groupe_id"]) == groupe)
+    ]
+    alertes = db.lister_alertes(statut="ACTIVE")
+    filtre_actif = bool(recherche or statut or groupe)
     return templates.TemplateResponse(request, "index.html", {
         "utilisateur": utilisateur,
         "equipements": equipements,
-        "alertes": db.lister_alertes(statut="ACTIVE"),
+        "equipements_filtres": equipements_filtres,
+        "sections": _sections_tableau_de_bord(equipements_filtres, alertes, filtre_actif) if equipements_filtres else [],
+        "filtre_actif": filtre_actif,
+        "groupes": db.lister_groupes(),
+        "recherche": recherche,
+        "statut": statut,
+        "groupe": groupe,
+        "alertes": alertes,
         "masquer_correlees": True,
         "page_active": "tableau_de_bord",
     })
@@ -166,6 +244,8 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" and itf["presente"] for itf in interfaces),
         "modeles": db.lister_modeles(),
         "seuils": db.seuils_de_l_equipement(id_equipement),
+        "services": db.services_de_l_equipement(id_equipement),
+        "reglages": REGLAGES,
         "alertes": db.lister_alertes(statut="ACTIVE", equipement_id=id_equipement),
         "masquer_correlees": False,
         "historique_alertes": db.lister_alertes(statut="CLOTUREE", equipement_id=id_equipement, limite=20),
@@ -184,6 +264,9 @@ async def page_alertes(request: Request, utilisateur: Connecte):
         "masquer_correlees": True,
         "seuils": db.lister_seuils(),
         "criticites": db.lister_criticites(),
+        "parametres": db.obtenir_parametres_generaux(),
+        "reglages": REGLAGES,
+        "nb_reglages_propres": db.compter_reglages_propres(),
         "historique": db.lister_alertes(statut="CLOTUREE", limite=50),
         "erreur": request.query_params.get("erreur"),
         "page_active": "alertes",
@@ -199,7 +282,7 @@ async def modifier_seuil_html(admin: Admin, metrique_id: int = Form(...), valeur
         message = "Seuils invalides : entre 0 et 100 %, l'avertissement ne dépassant pas le niveau critique"
         return RedirectResponse(f"/alertes?erreur={quote(message)}", status_code=303)
     collecte.reevaluer_seuils_du_parc()
-    return RedirectResponse("/alertes", status_code=303)
+    return RedirectResponse("/alertes#seuils-globaux", status_code=303)
 
 
 @app.post("/criticites")
@@ -207,7 +290,7 @@ async def modifier_criticite_html(admin: Admin, code: str = Form(...), criticite
     """Change la criticité d'un type d'alerte qui ne dépend pas d'un seuil."""
     if criticite not in ("AVERTISSEMENT", "CRITIQUE") or not db.modifier_criticite(code, criticite):
         return RedirectResponse(f"/alertes?erreur={quote('Criticité invalide')}", status_code=303)
-    return RedirectResponse("/alertes", status_code=303)
+    return RedirectResponse("/alertes#seuils-globaux", status_code=303)
 
 
 @app.post("/equipements/{id_equipement}/seuils")
@@ -300,23 +383,79 @@ async def supprimer_interface_html(id_equipement: int, interface_id: int, admin:
     return RedirectResponse(cible, status_code=303)
 
 
-@app.post("/equipements/{id_equipement}/intervalle-polling")
-async def modifier_intervalle_polling_html(id_equipement: int, admin: Admin, intervalle_polling: str = Form("")):
-    """Change l'intervalle de polling d'un équipement (champ vide = valeur globale)."""
-    if db.obtenir_equipement(id_equipement) is None:
-        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+@app.post("/equipements/{id_equipement}/reglages")
+async def modifier_reglage_equipement_html(id_equipement: int, admin: Admin, champ: str = Form(...),
+                                            valeur: str = Form(""), actif: str = Form("")):
+    """Enregistre un réglage propre à l'équipement ; décoché, il revient à la valeur globale."""
+    cible = f"/equipements/{id_equipement}"
+    if db.obtenir_equipement(id_equipement) is None or champ not in REGLAGES:
+        return RedirectResponse(f"/inventaire?erreur={quote('Réglage introuvable')}", status_code=303)
+    nombre = _entier_borne(valeur, champ) if actif else None
+    if actif and nombre is None:
+        return RedirectResponse(f"{cible}?erreur={quote(_message_bornes(champ))}#reglages", status_code=303)
+    db.modifier_reglage_equipement(id_equipement, champ, nombre)
+    collecte.oublier_echeances(id_equipement)
+    return RedirectResponse(f"{cible}#reglages", status_code=303)
 
-    intervalle_polling = intervalle_polling.strip()
-    if not intervalle_polling:
-        db.modifier_intervalle_polling(id_equipement, None)
-        return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
 
-    if not intervalle_polling.isdigit() or int(intervalle_polling) <= 0:
-        message = "L'intervalle de polling doit être un nombre de secondes positif"
-        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(message)}#collecte", status_code=303)
+@app.post("/equipements/{id_equipement}/services/{metrique_id}")
+async def modifier_reglage_service_html(id_equipement: int, metrique_id: int, admin: Admin,
+                                         intervalle_polling: str = Form(""), nb_echecs: str = Form(""),
+                                         actif: str = Form("")):
+    """Enregistre les réglages propres à un service ; décoché, il suit ceux de l'équipement."""
+    cible = f"/equipements/{id_equipement}"
+    if metrique_id not in {service["metrique_id"] for service in db.services_de_l_equipement(id_equipement)}:
+        message = "Ce service n'est pas surveillé par cet équipement"
+        return RedirectResponse(f"{cible}?erreur={quote(message)}#reglages", status_code=303)
+    intervalle, echecs = None, None
+    if actif:
+        if intervalle_polling.strip():
+            intervalle = _entier_borne(intervalle_polling, "intervalle_polling")
+            if intervalle is None:
+                return RedirectResponse(f"{cible}?erreur={quote(_message_bornes('intervalle_polling'))}#reglages", status_code=303)
+        if nb_echecs.strip():
+            echecs = _entier_borne(nb_echecs, "nb_echecs_alerte")
+            if echecs is None:
+                return RedirectResponse(f"{cible}?erreur={quote(_message_bornes('nb_echecs_alerte'))}#reglages", status_code=303)
+    if intervalle is None and echecs is None:
+        db.supprimer_reglage_service(id_equipement, metrique_id)
+    else:
+        db.enregistrer_reglage_service(id_equipement, metrique_id, intervalle, echecs)
+    collecte.oublier_echeances(id_equipement)
+    return RedirectResponse(f"{cible}#reglages", status_code=303)
 
-    db.modifier_intervalle_polling(id_equipement, int(intervalle_polling))
-    return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
+
+@app.post("/parametres")
+async def modifier_parametres_html(admin: Admin, intervalle_polling: str = Form(""),
+                                    nb_echecs_alerte: str = Form(""), duree_conservation: str = Form("")):
+    """Enregistre les réglages globaux de collecte et de conservation."""
+    saisies = {"intervalle_polling": intervalle_polling, "nb_echecs_alerte": nb_echecs_alerte,
+               "duree_conservation": duree_conservation}
+    valeurs = {champ: _entier_borne(texte, champ) for champ, texte in saisies.items()}
+    for champ, valeur in valeurs.items():
+        if valeur is None:
+            return RedirectResponse(f"/alertes?erreur={quote(_message_bornes(champ))}#parametres", status_code=303)
+    db.modifier_parametres(valeurs["intervalle_polling"], valeurs["nb_echecs_alerte"], valeurs["duree_conservation"])
+    collecte.oublier_echeances()
+    return RedirectResponse("/alertes#parametres", status_code=303)
+
+
+@app.get("/historique", response_class=HTMLResponse)
+async def page_historique(request: Request, utilisateur: Connecte):
+    """Changements de statut et alertes, avec recherche et filtre par catégorie."""
+    recherche = request.query_params.get("recherche", "").strip()
+    categorie = request.query_params.get("categorie", "")
+    limite = 300
+    return templates.TemplateResponse(request, "historique.html", {
+        "utilisateur": utilisateur,
+        "evenements": db.lister_historique(
+            categorie if categorie in ("STATUT", "AVERTISSEMENT", "CRITIQUE") else None, recherche, limite,
+        ),
+        "recherche": recherche,
+        "categorie": categorie,
+        "limite": limite,
+        "page_active": "historique",
+    })
 
 
 @app.get("/inventaire", response_class=HTMLResponse)
@@ -456,6 +595,14 @@ async def creer_groupe_html(admin: Admin, nom: str = Form(...)):
         message = f"Le groupe « {nom} » existe déjà"
         return RedirectResponse(f"/inventaire?erreur={quote(message)}", status_code=303)
     return RedirectResponse("/inventaire", status_code=303)
+
+
+@app.post("/groupes/{id_groupe}/supprimer")
+async def supprimer_groupe_html(id_groupe: int, admin: Admin):
+    """Supprime un groupe depuis la page Inventaire ; ses équipements restent, sans groupe."""
+    if not db.supprimer_groupe(id_groupe):
+        return RedirectResponse(f"/inventaire?erreur={quote('Groupe introuvable')}#groupes", status_code=303)
+    return RedirectResponse("/inventaire#groupes", status_code=303)
 
 
 # ---------------------------------------------------------------- API JSON

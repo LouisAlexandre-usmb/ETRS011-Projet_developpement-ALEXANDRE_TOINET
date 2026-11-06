@@ -1,0 +1,6 @@
+{# Attend `bleu` (facultatif), `orange` et `rouge`. Le texte d'aide évite de ne compter que sur la couleur. #}
+<span class="compteurs-etat">
+  {% if bleu is defined %}<span class="compteur-etat bleu" title="Disponibles : {{ bleu }}" aria-label="Disponibles : {{ bleu }}">{{ bleu }}</span>{% endif %}
+  <span class="compteur-etat orange" title="Avertissement : {{ orange }}" aria-label="Avertissement : {{ orange }}">{{ orange }}</span>
+  <span class="compteur-etat rouge" title="Critique : {{ rouge }}" aria-label="Critique : {{ rouge }}">{{ rouge }}</span>
+</span>

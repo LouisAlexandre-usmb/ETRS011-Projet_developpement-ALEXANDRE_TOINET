@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block titre %}Supervision SNMP{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ version_statique() }}">
 </head>
 <body>
   <header class="entete">
@@ -13,6 +13,7 @@
       <nav class="navigation">
         <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
         <a href="/alertes" class="{{ 'actif' if page_active == 'alertes' }}">Alertes</a>
+        <a href="/historique" class="{{ 'actif' if page_active == 'historique' }}">Historique</a>
         {% if utilisateur.est_admin %}
           <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
         {% endif %}
@@ -45,6 +46,7 @@
     {% endif %}
   </main>
 
+  <script src="{{ url_for('static', path='retractable.js') }}?v={{ version_statique() }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
