@@ -245,6 +245,7 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
         "modeles": db.lister_modeles(),
         "seuils": db.seuils_de_l_equipement(id_equipement),
         "services": db.services_de_l_equipement(id_equipement),
+        "codes_actifs": {e["code"] for e in db.lister_elements_actifs(equipement["modele_supervision_id"])},
         "reglages": REGLAGES,
         "alertes": db.lister_alertes(statut="ACTIVE", equipement_id=id_equipement),
         "masquer_correlees": False,
@@ -345,6 +346,7 @@ async def page_interfaces(request: Request, id_equipement: int, admin: Admin):
         "absentes": [itf for itf in interfaces if not itf["presente"]],
         "proposees": {itf["id"] for itf in presentes if collecte.interface_proposee(itf)},
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" for itf in presentes),
+        "modele_non_identifie": "modele_non_identifie" in request.query_params,
         "erreur": request.query_params.get("erreur"),
     })
 
@@ -507,8 +509,10 @@ async def ajouter_equipement_html(
         return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
 
     sys_object_id = infos.get("sysObjectID")
+    modele_non_identifie = False
     if id_modele is None:
-        id_modele = await collecte.detecter_modele(adresse, communaute_snmp, version_snmp, sys_object_id)
+        id_modele, identifie = await collecte.detecter_modele(adresse, communaute_snmp, version_snmp, sys_object_id)
+        modele_non_identifie = not identifie
 
     try:
         id_equipement = db.creer_equipement(
@@ -526,7 +530,8 @@ async def ajouter_equipement_html(
     await collecte.decouvrir_interfaces(
         db.obtenir_equipement(id_equipement), config.SNMP_TIMEOUT, config.SNMP_RETRIES,
     )
-    return RedirectResponse(f"/equipements/{id_equipement}/interfaces", status_code=303)
+    suite = "?modele_non_identifie=1" if modele_non_identifie else ""
+    return RedirectResponse(f"/equipements/{id_equipement}/interfaces{suite}", status_code=303)
 
 
 @app.post("/equipements/supprimer")
@@ -727,9 +732,12 @@ async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
         return JSONResponse(status_code=400, content={"erreur": str(exc)})
 
     sys_object_id = infos.get("sysObjectID")
-    id_modele = payload.modele_supervision_id or await collecte.detecter_modele(
-        payload.adresse, payload.communaute_snmp, payload.version_snmp, sys_object_id,
-    )
+    id_modele, modele_non_identifie = payload.modele_supervision_id, False
+    if id_modele is None:
+        id_modele, identifie = await collecte.detecter_modele(
+            payload.adresse, payload.communaute_snmp, payload.version_snmp, sys_object_id,
+        )
+        modele_non_identifie = not identifie
 
     try:
         id_equipement = db.creer_equipement(
@@ -742,4 +750,4 @@ async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
         return JSONResponse(
             status_code=409, content={"erreur": f"Un équipement existe déjà pour « {payload.adresse} »"},
         )
-    return {"id": id_equipement}
+    return {"id": id_equipement, "modele_non_identifie": modele_non_identifie}

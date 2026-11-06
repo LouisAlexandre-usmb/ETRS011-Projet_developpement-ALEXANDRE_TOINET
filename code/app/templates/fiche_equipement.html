@@ -217,9 +217,9 @@
   <details class="carte" id="mesures" open>
     <summary><h2>Mesures</h2></summary>
     <div class="graphiques">
-      <div><canvas id="graphique-cpu"></canvas></div>
-      <div><canvas id="graphique-ram"></canvas></div>
-      <div><canvas id="graphique-uptime"></canvas></div>
+      {% if 'cpu' in codes_actifs %}<div><canvas id="graphique-cpu"></canvas></div>{% endif %}
+      {% if 'ram' in codes_actifs %}<div><canvas id="graphique-ram"></canvas></div>{% endif %}
+      {% if 'uptime' in codes_actifs %}<div><canvas id="graphique-uptime"></canvas></div>{% endif %}
       <div>
         <label class="meta">Interface :
           <select id="selecteur-interface">
@@ -328,9 +328,16 @@
   }
 
   async function rafraichirCpuRamUptime() {
-    dessinerGraphique("graphique-cpu", await chargerSerie("cpu"), "CPU (%)");
-    dessinerGraphique("graphique-ram", await chargerSerie("ram"), "RAM (%)");
-    dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+    // Seuls les graphiques des indicateurs du modèle sont présents dans la page
+    if (document.getElementById("graphique-cpu")) {
+      dessinerGraphique("graphique-cpu", await chargerSerie("cpu"), "CPU (%)");
+    }
+    if (document.getElementById("graphique-ram")) {
+      dessinerGraphique("graphique-ram", await chargerSerie("ram"), "RAM (%)");
+    }
+    if (document.getElementById("graphique-uptime")) {
+      dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+    }
   }
 
   async function rafraichirTrafic() {

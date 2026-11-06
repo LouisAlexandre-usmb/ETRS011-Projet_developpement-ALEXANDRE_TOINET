@@ -285,9 +285,11 @@ async def _indicateur_repond(equipement: dict, element, options: dict) -> bool:
         return False
 
 
-async def detecter_modele(adresse: str, communaute: str, version: str, sys_object_id: str | None) -> int:
-    """Choisit le modèle dont le CPU et la RAM répondent le mieux. À égalité, ou si rien ne répond,
-    sysObjectID départage ; à défaut, c'est le modèle de plus petit id, le générique."""
+async def detecter_modele(adresse: str, communaute: str, version: str,
+                           sys_object_id: str | None) -> tuple[int, bool]:
+    """Choisit le modèle dont le CPU et la RAM répondent le mieux et renvoie (id du modèle, identifié).
+    À égalité, sysObjectID départage ; à défaut, c'est le modèle de plus petit id, le générique. Si ni
+    le CPU ni la RAM ne répondent, le modèle n'est pas identifié : c'est le générique, par défaut."""
     equipement = {"adresse": adresse, "communaute_snmp": communaute}
     options = {"timeout": config.SNMP_TIMEOUT, "retries": config.SNMP_RETRIES, "version": version}
     essais = [
@@ -305,9 +307,9 @@ async def detecter_modele(adresse: str, communaute: str, version: str, sys_objec
     par_sys_object_id = db.trouver_modele_pour(sys_object_id)
     meilleur_score = max(scores.values(), default=0)
     meilleurs = sorted(id_modele for id_modele, score in scores.items() if score == meilleur_score)
-    if meilleur_score == 0 or par_sys_object_id in meilleurs:
-        return par_sys_object_id
-    return meilleurs[0]
+    if meilleur_score == 0:
+        return db.MODELE_GENERIQUE, False
+    return (par_sys_object_id if par_sys_object_id in meilleurs else meilleurs[0]), True
 
 
 async def decouvrir_interfaces(equipement: dict, timeout: float, retries: int) -> bool:

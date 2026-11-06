@@ -209,6 +209,9 @@ def init_db() -> None:
         _seed(connexion)
 
 
+MODELE_GENERIQUE = 1   # repli pour un équipement dont ni le CPU ni la RAM ne répondent
+
+
 def _migrer(connexion: sqlite3.Connection) -> None:
     """Ajoute aux bases existantes les colonnes que CREATE TABLE IF NOT EXISTS ne crée pas."""
     colonnes = {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(interface)")}
@@ -248,6 +251,15 @@ def _migrer(connexion: sqlite3.Connection) -> None:
         connexion.execute("DELETE FROM seuil_equipement WHERE actif = 0")
     # Ancienne valeur par défaut, trop lente pour suivre les alertes (aucun écran ne la modifie)
     connexion.execute("UPDATE parametres_generaux SET periode_rafraichissement = 10 WHERE periode_rafraichissement = 30")
+    # Ce modèle n'existe plus (l'id 3 est réservé au modèle Linux) : ses équipements passent au générique
+    for modele in connexion.execute(
+        "SELECT id FROM modele_supervision WHERE nom = 'Équipement réseau basique'"
+    ).fetchall():
+        connexion.execute(
+            "UPDATE equipement SET modele_supervision_id = ? WHERE modele_supervision_id = ?",
+            (MODELE_GENERIQUE, modele["id"]),
+        )
+        connexion.execute("DELETE FROM modele_supervision WHERE id = ?", (modele["id"],))
     if "visible" in colonnes:  # ancienne colonne de masquage : sa décision est reprise une fois
         connexion.execute("UPDATE interface SET suivi = 'NON', visible = 1 WHERE visible = 0")
 
