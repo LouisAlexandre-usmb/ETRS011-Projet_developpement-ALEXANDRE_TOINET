@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     planificateur.shutdown()
 
 
-app = FastAPI(title="Supervision SNMP", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Supervision SNMP", version="0.5.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -108,8 +108,11 @@ async def fiche_equipement(request: Request, id_equipement: int):
         "parametres": db.obtenir_parametres_generaux(),
         "modeles": db.lister_modeles_supervision(),
         "codes_actifs": codes_actifs,
+        "alertes_actives": db.lister_alertes("ACTIVE", id_equipement),
         "enfants": db.lister_enfants(id_equipement),
         "interfaces": db.lister_interfaces(id_equipement),
+        "utilisations_interfaces": db.dernieres_valeurs_par_interface(id_equipement, "utilisation_interface"),
+        "volumes": db.lister_volumes(id_equipement),
         "erreur": request.query_params.get("erreur"),
         "page_active": "fiche_equipement",
     })
@@ -172,6 +175,45 @@ async def basculer_visibilite_interface_html(id_interface: int):
     if id_equipement is None:
         return RedirectResponse(f"/inventaire?erreur={quote('Interface introuvable')}", status_code=303)
     return RedirectResponse(f"/equipements/{id_equipement}#interfaces", status_code=303)
+
+
+@app.post("/volumes/{id_volume}/basculer-visibilite")
+async def basculer_visibilite_volume_html(id_volume: int):
+    """Masque/réaffiche un volume sur la fiche de son équipement (n'affecte pas la collecte)."""
+    id_equipement = db.basculer_visibilite_volume(id_volume)
+    if id_equipement is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Volume introuvable')}", status_code=303)
+    return RedirectResponse(f"/equipements/{id_equipement}#volumes", status_code=303)
+
+
+@app.get("/alertes", response_class=HTMLResponse)
+async def alertes(request: Request):
+    """Configuration des seuils globaux et liste des alertes actives."""
+    return templates.TemplateResponse(request, "alertes.html", {
+        "seuils": db.lister_seuils_configurables(),
+        "alertes": db.lister_alertes("ACTIVE"),
+        "erreur": request.query_params.get("erreur"),
+        "page_active": "alertes",
+    })
+
+
+@app.post("/seuils")
+async def definir_seuil_html(metrique_id: int = Form(...), operateur: str = Form(...),
+                              valeur_seuil: str = Form("")):
+    """Crée, met à jour ou retire le seuil global d'une métrique (vide = aucun seuil)."""
+    valeur_seuil = valeur_seuil.strip().replace(",", ".")
+    if not valeur_seuil:
+        db.supprimer_seuil(metrique_id)
+        return RedirectResponse("/alertes", status_code=303)
+
+    try:
+        valeur = float(valeur_seuil)
+    except ValueError:
+        message = "La valeur du seuil doit être un nombre"
+        return RedirectResponse(f"/alertes?erreur={quote(message)}", status_code=303)
+
+    db.definir_seuil(metrique_id, operateur, valeur)
+    return RedirectResponse("/alertes", status_code=303)
 
 
 TAILLE_PAGE_LOGS = 50
@@ -360,9 +402,16 @@ async def mesures_equipement_api(id_equipement: int, metrique: str,
                                   interface_id: int | None = None,
                                   depuis: str | None = None, jusqu_a: str | None = None):
     """Historique des relevés d'une métrique pour un équipement (et, si fournie, une
-    interface). Query params : metrique (code, ex. "cpu"), interface_id, depuis, jusqu_a."""
+    interface). Query params : metrique (code, ex. "cpu"), interface_id, depuis, jusqu_a.
+    Un compteur de trafic par interface (if_in_octets/if_out_octets) est renvoyé comme un
+    débit (octets/s), pas comme le compteur brut : cf. db.lister_debit."""
     if db.obtenir_equipement(id_equipement) is None:
         return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
+
+    metrique_ligne = db.obtenir_metrique(metrique)
+    if metrique_ligne and metrique_ligne["type_valeur"] == "COMPTEUR" and metrique_ligne["par_interface"]:
+        return db.lister_debit(id_equipement, metrique, interface_id, depuis, jusqu_a)
+
     mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a)
     return [dict(ligne) for ligne in mesures]
 

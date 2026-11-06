@@ -55,6 +55,17 @@ body {
   margin-bottom: 1.25rem;
 }
 
+.bandeau-degrade {
+  background: #FDEFD9;
+  color: var(--statut-degrade);
+  font-weight: 600;
+  font-size: .9rem;
+  border-radius: 8px;
+  padding: .6rem .9rem;
+  margin-top: .9rem;
+}
+.bandeau-degrade strong { margin-right: .4rem; }
+
 .carte {
   background: var(--carte);
   border: 1px solid var(--trait);
@@ -63,6 +74,14 @@ body {
   margin-bottom: 1.5rem;
 }
 .carte-titre { display: flex; align-items: center; justify-content: space-between; }
+
+.page-titre {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+.page-titre h2 { margin: 0; font-size: 1.4rem; }
 .carte-titre h2 { margin: 0; font-size: 1.15rem; }
 .carte-titre h2 .pastille { margin-left: .6rem; vertical-align: middle; }
 .meta { color: var(--sourdine); font-size: .9rem; }
@@ -79,6 +98,7 @@ body {
 .pastille.attente { background: #EDEBE4; color: var(--sourdine); }
 .pastille.type-statut { background: #EDEBE4; color: var(--encre); }
 .pastille.type-erreur { background: #F6E3D6; color: var(--alerte); }
+.pastille.type-alerte { background: #FDEFD9; color: var(--statut-degrade); }
 
 .sous-titre {
   margin: 1.5rem 0 0;
@@ -167,6 +187,19 @@ button:hover { opacity: .9; }
 }
 .carte > summary::marker { color: var(--accent); }
 
+.sous-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--trait);
+}
+.sous-section > summary {
+  cursor: pointer;
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--sourdine);
+}
+.sous-section > summary::marker { color: var(--accent); }
+
 summary.resume-groupe {
   display: flex;
   align-items: center;
@@ -189,14 +222,17 @@ summary.resume-groupe {
   font-size: .85rem;
   color: var(--sourdine);
 }
-.formulaire input {
+.formulaire input,
+.formulaire select {
   width: 100%;
   border: 1px solid var(--trait);
   border-radius: 6px;
   padding: .55rem .7rem;
   font: inherit;
   color: var(--encre);
+  background: var(--carte);
 }
+.formulaire select { cursor: pointer; }
 .formulaire button { justify-self: start; }
 
 .formulaire-ligne {

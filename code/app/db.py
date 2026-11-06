@@ -5,6 +5,7 @@ connexion et la referme ; pour le volume de ce projet, c'est plus simple à suiv
 de connexions partagées.
 """
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from app import config
@@ -42,6 +43,48 @@ def _migrer(connexion: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass  # colonne déjà présente
 
+    try:
+        connexion.execute(
+            "ALTER TABLE alerte ADD COLUMN volume_id INTEGER REFERENCES volume(id) ON DELETE SET NULL"
+        )
+    except sqlite3.OperationalError:
+        pass  # colonne déjà présente (une simple colonne nullable, pas de CHECK à élargir ici)
+
+    for colonne in ("taille_octets", "utilise_octets"):
+        try:
+            connexion.execute(f"ALTER TABLE volume ADD COLUMN {colonne} INTEGER")
+        except sqlite3.OperationalError:
+            pass  # colonne déjà présente
+
+    # alerte.type_alerte doit accepter INTERFACE_INDISPONIBLE, et alerte a besoin d'un
+    # interface_id : un ALTER TABLE ne peut pas élargir une contrainte CHECK existante, donc
+    # on recrée la table (en copiant les lignes) si elle n'a pas encore la nouvelle colonne.
+    colonnes_alerte = [ligne[1] for ligne in connexion.execute("PRAGMA table_info(alerte)").fetchall()]
+    if colonnes_alerte and "interface_id" not in colonnes_alerte:
+        connexion.executescript(
+            "ALTER TABLE alerte RENAME TO alerte_ancienne;"
+            "CREATE TABLE alerte ("
+            "    id                 INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "    equipement_id      INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,"
+            "    type_alerte        TEXT NOT NULL CHECK (type_alerte IN"
+            "        ('INDISPONIBILITE', 'SEUIL_DEPASSE', 'INTERFACE_INDISPONIBLE')),"
+            "    etat               TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (etat IN ('ACTIVE', 'CLOTUREE', 'MASQUEE')),"
+            "    date_declenchement TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),"
+            "    date_cloture       TEXT,"
+            "    valeur_mesuree     REAL,"
+            "    message            TEXT NOT NULL,"
+            "    seuil_id           INTEGER REFERENCES seuil(id) ON DELETE SET NULL,"
+            "    interface_id       INTEGER REFERENCES interface(id) ON DELETE SET NULL,"
+            "    cause_racine_id    INTEGER REFERENCES alerte(id)"
+            ");"
+            "INSERT INTO alerte (id, equipement_id, type_alerte, etat, date_declenchement,"
+            "                    date_cloture, valeur_mesuree, message, seuil_id, cause_racine_id) "
+            "SELECT id, equipement_id, type_alerte, etat, date_declenchement,"
+            "       date_cloture, valeur_mesuree, message, seuil_id, cause_racine_id "
+            "FROM alerte_ancienne;"
+            "DROP TABLE alerte_ancienne;"
+        )
+
 
 def _seed(connexion: sqlite3.Connection) -> None:
     """Insère les données de référence si elles n'existent pas encore (idempotent)."""
@@ -51,8 +94,13 @@ def _seed(connexion: sqlite3.Connection) -> None:
         ("uptime", "Disponibilité (uptime)", None, "COMPTEUR", 0),
         ("cpu", "Charge CPU", "%", "JAUGE", 0),
         ("ram", "Mémoire utilisée", "%", "JAUGE", 0),
-        ("if_in_octets", "Trafic entrant", "octets", "COMPTEUR", 1),
-        ("if_out_octets", "Trafic sortant", "octets", "COMPTEUR", 1),
+        ("if_in_octets", "Trafic entrant", "o/s", "COMPTEUR", 1),
+        ("if_out_octets", "Trafic sortant", "o/s", "COMPTEUR", 1),
+        ("volume", "Stockage", "%", "JAUGE", 0),
+        # Pas d'OID associé (pas d'element_surveille pour cette métrique) : calculée à la
+        # collecte à partir du débit déjà mesuré (if_in_octets/if_out_octets) et de la vitesse
+        # de l'interface, cf. app/collecte.py::_calculer_utilisation_interfaces.
+        ("utilisation_interface", "Utilisation d'interface", "%", "JAUGE", 1),
     ]
     connexion.executemany(
         "INSERT OR IGNORE INTO metrique (code, libelle, unite, type_valeur, par_interface) "
@@ -69,10 +117,10 @@ def _seed(connexion: sqlite3.Connection) -> None:
     connexion.execute(
         "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
         "(1, 'Équipement générique', "
-        "'Supervise la disponibilité, le trafic entrant/sortant par interface, le CPU et la "
-        "mémoire (via HOST-RESOURCES-MIB). Convient à un équipement avec un OS généraliste "
-        "(serveur Linux, NAS...) ; le CPU et la RAM ne remonteront rien sur un équipement "
-        "réseau à OS propriétaire (switch, routeur constructeur)')"
+        "'Supervise la disponibilité, le trafic entrant/sortant par interface, le CPU, la "
+        "mémoire et le stockage (via HOST-RESOURCES-MIB). Convient à un équipement "
+        "avec un OS généraliste (serveur Linux, NAS...) ; ces indicateurs ne remonteront rien "
+        "sur un équipement réseau à OS propriétaire (switch, routeur constructeur)')"
     )
     _inserer_elements_surveilles(connexion, 1, elements_communs + [
         # HOST-RESOURCES-MIB : marche sur un agent générique (Linux...), pas forcément sur
@@ -80,6 +128,8 @@ def _seed(connexion: sqlite3.Connection) -> None:
         ("cpu", "1.3.6.1.2.1.25.3.3.1.2"),  # hrProcessorLoad, table à moyenner (plusieurs cœurs)
         ("ram", "1.3.6.1.2.1.25.2.3.1.6"),  # hrStorageUsed, à combiner avec hrStorageSize
                                              # et filtrer sur hrStorageType = RAM (côté collecte)
+        ("volume", "1.3.6.1.2.1.25.2.3.1.6"),  # hrStorageUsed aussi, mais filtré sur le type
+                                                 # "disque fixe" ; un ou plusieurs volumes possibles
     ])
 
     connexion.execute(
@@ -245,36 +295,82 @@ def lister_interfaces(equipement_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def basculer_visibilite_interface(interface_id: int) -> int | None:
-    """Masque une interface visible, ou réaffiche une interface masquée. Renvoie l'id de
-    son équipement (pour la redirection), ou None si l'interface n'existe pas."""
+def dernieres_valeurs_par_interface(equipement_id: int, code_metrique: str) -> dict[int, float]:
+    """Dernière valeur connue d'une métrique par-interface (ex. taux d'utilisation), pour
+    chaque interface d'un équipement. Renvoie {interface_id: valeur}, pour affichage sur la
+    fiche équipement (cf. fiche_equipement.html)."""
+    with get_connection() as connexion:
+        lignes = connexion.execute(
+            "SELECT mesure.interface_id, mesure.valeur FROM mesure "
+            "JOIN metrique ON metrique.id = mesure.metrique_id "
+            "WHERE mesure.equipement_id = ? AND metrique.code = ? AND mesure.interface_id IS NOT NULL "
+            "AND mesure.id = ("
+            "    SELECT MAX(m2.id) FROM mesure AS m2 WHERE m2.equipement_id = mesure.equipement_id "
+            "    AND m2.metrique_id = mesure.metrique_id AND m2.interface_id = mesure.interface_id"
+            ")",
+            (equipement_id, code_metrique),
+        ).fetchall()
+        return {ligne["interface_id"]: ligne["valeur"] for ligne in lignes}
+
+
+def obtenir_interface(interface_id: int) -> sqlite3.Row | None:
+    """Renvoie une interface par son id (nom, vitesse... pour le calcul du taux
+    d'utilisation, cf. app/collecte.py)."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM interface WHERE id = ?", (interface_id,)).fetchone()
+
+
+def _basculer_visibilite(table: str, id_ligne: int) -> int | None:
+    """Masque/réaffiche une ligne d'une table "supervisable" (interface ou volume, même
+    forme : equipement_id + visible). Renvoie l'id de l'équipement, ou None si absente."""
     with get_connection() as connexion:
         ligne = connexion.execute(
-            "SELECT equipement_id, visible FROM interface WHERE id = ?", (interface_id,)
+            f"SELECT equipement_id, visible FROM {table} WHERE id = ?", (id_ligne,)
         ).fetchone()
         if ligne is None:
             return None
         connexion.execute(
-            "UPDATE interface SET visible = ? WHERE id = ?",
-            (0 if ligne["visible"] else 1, interface_id),
+            f"UPDATE {table} SET visible = ? WHERE id = ?",
+            (0 if ligne["visible"] else 1, id_ligne),
         )
         return ligne["equipement_id"]
 
 
-def _filtre_logs(equipement_id: int | None, depuis: str | None,
-                  jusqu_a: str | None) -> tuple[str, list]:
-    """Construit la clause WHERE commune aux deux tables de logs, et ses paramètres.
-    Utilisée à la fois pour compter et pour lister, afin que les deux restent cohérents."""
+def basculer_visibilite_interface(interface_id: int) -> int | None:
+    """Masque une interface visible, ou réaffiche une interface masquée. Renvoie l'id de
+    son équipement (pour la redirection), ou None si l'interface n'existe pas."""
+    return _basculer_visibilite("interface", interface_id)
+
+
+def lister_volumes(equipement_id: int) -> list[sqlite3.Row]:
+    """Volumes d'un équipement (visibles et masqués), triés par index SNMP."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM volume WHERE equipement_id = ? ORDER BY index_snmp",
+            (equipement_id,),
+        ).fetchall()
+
+
+def basculer_visibilite_volume(volume_id: int) -> int | None:
+    """Masque un volume visible, ou réaffiche un volume masqué. Renvoie l'id de son
+    équipement (pour la redirection), ou None si le volume n'existe pas."""
+    return _basculer_visibilite("volume", volume_id)
+
+
+def _filtre_logs(equipement_id: int | None, depuis: str | None, jusqu_a: str | None,
+                  colonne_horodatage: str = "horodatage") -> tuple[str, list]:
+    """Construit la clause WHERE commune aux tables de logs, et ses paramètres. Le nom de
+    la colonne horodatage varie selon la table (alerte utilise date_declenchement)."""
     condition = "1 = 1"
     parametres: list = []
     if equipement_id is not None:
         condition += " AND equipement_id = ?"
         parametres.append(equipement_id)
     if depuis:
-        condition += " AND horodatage >= ?"
+        condition += f" AND {colonne_horodatage} >= ?"
         parametres.append(depuis)
     if jusqu_a:
-        condition += " AND horodatage <= ?"
+        condition += f" AND {colonne_horodatage} <= ?"
         parametres.append(jusqu_a)
     return condition, parametres
 
@@ -282,22 +378,26 @@ def _filtre_logs(equipement_id: int | None, depuis: str | None,
 def compter_logs(equipement_id: int | None = None, depuis: str | None = None,
                   jusqu_a: str | None = None) -> int:
     """Nombre total de logs correspondant aux filtres (pour la pagination)."""
-    condition, parametres = _filtre_logs(equipement_id, depuis, jusqu_a)
+    condition_cs, parametres_cs = _filtre_logs(equipement_id, depuis, jusqu_a)
+    condition_ec, parametres_ec = _filtre_logs(equipement_id, depuis, jusqu_a)
+    condition_al, parametres_al = _filtre_logs(equipement_id, depuis, jusqu_a, "date_declenchement")
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT (SELECT COUNT(*) FROM changement_statut WHERE " + condition + ") + "
-            "       (SELECT COUNT(*) FROM erreur_collecte WHERE " + condition + ") AS total",
-            parametres + parametres,
+            "SELECT (SELECT COUNT(*) FROM changement_statut WHERE " + condition_cs + ") + "
+            "       (SELECT COUNT(*) FROM erreur_collecte WHERE " + condition_ec + ") + "
+            "       (SELECT COUNT(*) FROM alerte WHERE " + condition_al + ") AS total",
+            parametres_cs + parametres_ec + parametres_al,
         ).fetchone()["total"]
 
 
 def lister_logs(equipement_id: int | None = None, depuis: str | None = None,
                  jusqu_a: str | None = None, limite: int = 50, decalage: int = 0) -> list[sqlite3.Row]:
-    """Historique unifié (changements de statut + erreurs de collecte), le plus récent
-    en premier, filtrable par équipement et par plage de dates, et paginé (limite/décalage).
-    Chaque ligne porte un type_log ('CHANGEMENT_STATUT' ou 'ERREUR_COLLECTE') pour les
-    distinguer à l'affichage."""
-    condition, parametres = _filtre_logs(equipement_id, depuis, jusqu_a)
+    """Historique unifié (changements de statut + erreurs de collecte + alertes), le plus
+    récent en premier, filtrable par équipement et par plage de dates, et paginé. Chaque
+    ligne porte un type_log pour les distinguer à l'affichage."""
+    condition_cs, parametres_cs = _filtre_logs(equipement_id, depuis, jusqu_a)
+    condition_ec, parametres_ec = _filtre_logs(equipement_id, depuis, jusqu_a)
+    condition_al, parametres_al = _filtre_logs(equipement_id, depuis, jusqu_a, "date_declenchement")
     with get_connection() as connexion:
         return connexion.execute(
             "SELECT equipement.id AS equipement_id, equipement.nom AS equipement_nom, "
@@ -305,15 +405,19 @@ def lister_logs(equipement_id: int | None = None, depuis: str | None = None,
             "FROM ("
             "   SELECT equipement_id, horodatage, 'CHANGEMENT_STATUT' AS type_log, "
             "          (ancien_statut || ' -> ' || nouveau_statut) AS detail "
-            "   FROM changement_statut WHERE " + condition + " "
+            "   FROM changement_statut WHERE " + condition_cs + " "
             "   UNION ALL "
             "   SELECT equipement_id, horodatage, 'ERREUR_COLLECTE' AS type_log, "
             "          (type_erreur || COALESCE(' : ' || message, '')) AS detail "
-            "   FROM erreur_collecte WHERE " + condition +
+            "   FROM erreur_collecte WHERE " + condition_ec + " "
+            "   UNION ALL "
+            "   SELECT equipement_id, date_declenchement AS horodatage, 'ALERTE' AS type_log, "
+            "          message AS detail "
+            "   FROM alerte WHERE " + condition_al +
             ") AS sous_requete "
             "JOIN equipement ON equipement.id = sous_requete.equipement_id "
             "ORDER BY sous_requete.horodatage DESC LIMIT ? OFFSET ?",
-            parametres + parametres + [limite, decalage],
+            parametres_cs + parametres_ec + parametres_al + [limite, decalage],
         ).fetchall()
 
 
@@ -339,6 +443,77 @@ def lister_mesures(equipement_id: int, code_metrique: str, interface_id: int | N
             f"WHERE {condition} ORDER BY mesure.horodatage",
             parametres,
         ).fetchall()
+
+
+def obtenir_metrique(code: str) -> sqlite3.Row | None:
+    """Renvoie une métrique du catalogue par son code, ou None si elle n'existe pas."""
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM metrique WHERE code = ?", (code,)).fetchone()
+
+
+def lister_debit(equipement_id: int, code_metrique: str, interface_id: int | None = None,
+                  depuis: str | None = None, jusqu_a: str | None = None) -> list[dict]:
+    """Débit (par seconde) d'un compteur de trafic par interface (if_in_octets/if_out_octets),
+    calculé par différence entre deux relevés bruts consécutifs. Un trou dans les relevés
+    bruts (équipement injoignable), ou un compteur revenu en arrière (remise à zéro ou
+    dépassement de capacité, déjà journalisé en VALEUR_ABERRANTE à la collecte, cf.
+    app/collecte.py), donne un trou ici aussi plutôt qu'un débit négatif."""
+    mesures = lister_mesures(equipement_id, code_metrique, interface_id, depuis, jusqu_a)
+    resultat = []
+    precedente = None
+    for mesure in mesures:
+        debit = None
+        if (precedente is not None and mesure["valeur"] is not None
+                and precedente["valeur"] is not None):
+            delta_valeur = mesure["valeur"] - precedente["valeur"]
+            delta_temps = (datetime.fromisoformat(mesure["horodatage"])
+                           - datetime.fromisoformat(precedente["horodatage"])).total_seconds()
+            if delta_valeur >= 0 and delta_temps > 0:
+                debit = delta_valeur / delta_temps
+        resultat.append({"horodatage": mesure["horodatage"], "valeur": debit})
+        precedente = mesure
+    return resultat
+
+
+def debit_instantane(equipement_id: int, metrique_id: int, interface_id: int) -> float | None:
+    """Débit (par seconde) entre les deux derniers relevés bruts d'un compteur de trafic par
+    interface, pour le calcul immédiat du taux d'utilisation à la collecte (cf.
+    app/collecte.py::_calculer_utilisation_interfaces). Même règle que lister_debit : un
+    compteur revenu en arrière donne None, jamais un débit négatif."""
+    with get_connection() as connexion:
+        lignes = connexion.execute(
+            "SELECT horodatage, valeur FROM mesure WHERE equipement_id = ? AND metrique_id = ? "
+            "AND interface_id = ? AND valeur IS NOT NULL ORDER BY horodatage DESC LIMIT 2",
+            (equipement_id, metrique_id, interface_id),
+        ).fetchall()
+    if len(lignes) < 2:
+        return None
+    recente, precedente = lignes
+    delta_valeur = recente["valeur"] - precedente["valeur"]
+    delta_temps = (datetime.fromisoformat(recente["horodatage"])
+                   - datetime.fromisoformat(precedente["horodatage"])).total_seconds()
+    if delta_valeur < 0 or delta_temps <= 0:
+        return None
+    return delta_valeur / delta_temps
+
+
+def derniere_valeur_mesure(equipement_id: int, metrique_id: int,
+                            interface_id: int | None = None) -> float | None:
+    """Dernière valeur brute connue d'une métrique (et, si fournie, d'une interface), pour
+    détecter à la collecte un compteur revenu en arrière (cf. app/collecte.py)."""
+    condition = "equipement_id = ? AND metrique_id = ? AND valeur IS NOT NULL"
+    parametres: list = [equipement_id, metrique_id]
+    if interface_id is not None:
+        condition += " AND interface_id = ?"
+        parametres.append(interface_id)
+    else:
+        condition += " AND interface_id IS NULL"
+    with get_connection() as connexion:
+        ligne = connexion.execute(
+            f"SELECT valeur FROM mesure WHERE {condition} ORDER BY horodatage DESC LIMIT 1",
+            parametres,
+        ).fetchone()
+        return ligne["valeur"] if ligne else None
 
 
 def trouver_equipement(recherche: str) -> sqlite3.Row | None:
@@ -462,6 +637,27 @@ def upsert_interface(equipement_id: int, index_snmp: int, nom: str,
         ).fetchone()
 
 
+def upsert_volume(equipement_id: int, index_snmp: int, nom: str, taille_octets: int,
+                   utilise_octets: int, pourcentage_utilise: float) -> sqlite3.Row:
+    """Crée le volume s'il est nouveau (visible par défaut : seuls les volumes qui
+    représentent un vrai disque arrivent ici, cf. app/collecte.py), sinon met à jour son
+    nom/sa taille/son pourcentage utilisé (jamais sa visibilité, que seul
+    basculer_visibilite_volume change). Renvoie son id et son indicateur de visibilité."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "INSERT INTO volume (equipement_id, index_snmp, nom, taille_octets, utilise_octets, "
+            "pourcentage_utilise) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (equipement_id, index_snmp) DO UPDATE SET "
+            "nom = excluded.nom, taille_octets = excluded.taille_octets, "
+            "utilise_octets = excluded.utilise_octets, pourcentage_utilise = excluded.pourcentage_utilise",
+            (equipement_id, index_snmp, nom, taille_octets, utilise_octets, pourcentage_utilise),
+        )
+        return connexion.execute(
+            "SELECT id, visible FROM volume WHERE equipement_id = ? AND index_snmp = ?",
+            (equipement_id, index_snmp),
+        ).fetchone()
+
+
 def enregistrer_erreur_collecte(equipement_id: int, type_erreur: str, message: str | None = None) -> None:
     """Journalise une erreur de collecte, sans jamais interrompre la collecte des autres équipements."""
     with get_connection() as connexion:
@@ -484,7 +680,9 @@ def _changer_statut(connexion: sqlite3.Connection, equipement_id: int,
 
 def enregistrer_reussite_collecte(equipement_id: int) -> None:
     """Après une collecte réussie (l'équipement a répondu) : échecs à zéro, horodatage, et
-    passage à OPERATIONNEL si l'équipement ne l'était pas déjà."""
+    passage à OPERATIONNEL si l'équipement ne l'était pas déjà. Ne touche pas à DEGRADE :
+    ce statut relève des seuils (cf. declencher_alerte_seuil/resoudre_alerte_seuil), pas de
+    la connectivité."""
     with get_connection() as connexion:
         ancien_statut = connexion.execute(
             "SELECT statut FROM equipement WHERE id = ?", (equipement_id,)
@@ -494,7 +692,7 @@ def enregistrer_reussite_collecte(equipement_id: int) -> None:
             "derniere_collecte = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE id = ?",
             (equipement_id,),
         )
-        if ancien_statut != "OPERATIONNEL":
+        if ancien_statut not in ("OPERATIONNEL", "DEGRADE"):
             _changer_statut(connexion, equipement_id, ancien_statut, "OPERATIONNEL")
 
 
@@ -512,3 +710,244 @@ def enregistrer_echec_collecte(equipement_id: int, nb_echecs_avant_indisponibili
         )
         if nouveaux_echecs >= nb_echecs_avant_indisponibilite and ligne["statut"] != "INDISPONIBLE":
             _changer_statut(connexion, equipement_id, ligne["statut"], "INDISPONIBLE")
+
+
+# ---------------------------------------------------------------- seuils et alertes
+
+def lister_seuils_configurables() -> list[sqlite3.Row]:
+    """Métriques pour lesquelles un seuil global peut être défini : CPU, RAM et stockage
+    pour l'instant (pas uptime, qui est un compteur, pas un pourcentage ; pas le
+    trafic par interface, qui demanderait de savoir quelle interface a déclenché l'alerte).
+    Avec le seuil actuel s'il y en a un (LEFT JOIN : peut n'y en avoir aucun)."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT metrique.id AS metrique_id, metrique.code, metrique.libelle, metrique.unite, "
+            "seuil.operateur, seuil.valeur_seuil "
+            "FROM metrique LEFT JOIN seuil ON seuil.metrique_id = metrique.id "
+            "WHERE metrique.code IN ('cpu', 'ram', 'volume', 'utilisation_interface') "
+            "ORDER BY metrique.libelle"
+        ).fetchall()
+
+
+def definir_seuil(metrique_id: int, operateur: str, valeur_seuil: float) -> None:
+    """Crée ou remplace le seuil global d'une métrique."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "INSERT INTO seuil (metrique_id, operateur, valeur_seuil) VALUES (?, ?, ?) "
+            "ON CONFLICT (metrique_id) DO UPDATE SET "
+            "operateur = excluded.operateur, valeur_seuil = excluded.valeur_seuil, actif = 1",
+            (metrique_id, operateur, valeur_seuil),
+        )
+
+
+def supprimer_seuil(metrique_id: int) -> None:
+    """Retire le seuil d'une métrique. Clôture d'abord les alertes actives qu'il avait
+    déclenchées : une fois le seuil supprimé, plus rien ne les réévaluerait jamais, elles
+    resteraient actives pour toujours et l'équipement resterait coincé en DEGRADE."""
+    with get_connection() as connexion:
+        seuil = connexion.execute("SELECT id FROM seuil WHERE metrique_id = ?", (metrique_id,)).fetchone()
+        if seuil is None:
+            return
+        for alerte in connexion.execute(
+            "SELECT id, equipement_id FROM alerte WHERE seuil_id = ? AND etat = 'ACTIVE'", (seuil["id"],)
+        ).fetchall():
+            _cloturer_alerte(connexion, alerte["id"], alerte["equipement_id"])
+        connexion.execute("DELETE FROM seuil WHERE id = ?", (seuil["id"],))
+
+
+def obtenir_seuil_actif(metrique_id: int) -> sqlite3.Row | None:
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM seuil WHERE metrique_id = ? AND actif = 1", (metrique_id,)
+        ).fetchone()
+
+
+def _degrader_si_necessaire(connexion: sqlite3.Connection, equipement_id: int) -> None:
+    """Passe l'équipement en DEGRADE, sauf s'il est déjà INDISPONIBLE (qui reste prioritaire)
+    ou déjà DEGRADE (pour une autre raison). Appelée à l'intérieur d'une connexion ouverte."""
+    ligne = connexion.execute("SELECT statut FROM equipement WHERE id = ?", (equipement_id,)).fetchone()
+    if ligne["statut"] not in ("INDISPONIBLE", "DEGRADE"):
+        _changer_statut(connexion, equipement_id, ligne["statut"], "DEGRADE")
+
+
+def declencher_alerte_seuil(equipement_id: int, seuil_id: int, metrique_id: int, valeur: float) -> None:
+    """Crée l'alerte de dépassement de seuil si elle n'existe pas déjà (idempotent : appelée
+    à chaque cycle de collecte tant que le seuil reste dépassé), et passe l'équipement en DEGRADE."""
+    with get_connection() as connexion:
+        deja_active = connexion.execute(
+            "SELECT 1 FROM alerte WHERE equipement_id = ? AND seuil_id = ? AND etat = 'ACTIVE'",
+            (equipement_id, seuil_id),
+        ).fetchone()
+        if deja_active:
+            return
+
+        metrique = connexion.execute(
+            "SELECT libelle, unite FROM metrique WHERE id = ?", (metrique_id,)
+        ).fetchone()
+        unite = metrique["unite"] or ""
+        message = f"{metrique['libelle']} à {valeur:.1f}{unite}, seuil dépassé"
+        connexion.execute(
+            "INSERT INTO alerte (equipement_id, type_alerte, seuil_id, valeur_mesuree, message) "
+            "VALUES (?, 'SEUIL_DEPASSE', ?, ?, ?)",
+            (equipement_id, seuil_id, valeur, message),
+        )
+        _degrader_si_necessaire(connexion, equipement_id)
+
+
+def _cloturer_alerte(connexion: sqlite3.Connection, alerte_id: int, equipement_id: int) -> None:
+    """Clôture une alerte, et repasse l'équipement en OPERATIONNEL s'il n'a plus aucune
+    autre alerte active, de quelque type que ce soit. Appelée dans une connexion ouverte."""
+    connexion.execute(
+        "UPDATE alerte SET etat = 'CLOTUREE', "
+        "date_cloture = strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE id = ?",
+        (alerte_id,),
+    )
+    autres_actives = connexion.execute(
+        "SELECT COUNT(*) AS n FROM alerte WHERE equipement_id = ? AND etat = 'ACTIVE'",
+        (equipement_id,),
+    ).fetchone()["n"]
+    if autres_actives == 0:
+        statut_actuel = connexion.execute(
+            "SELECT statut FROM equipement WHERE id = ?", (equipement_id,)
+        ).fetchone()["statut"]
+        if statut_actuel == "DEGRADE":
+            _changer_statut(connexion, equipement_id, "DEGRADE", "OPERATIONNEL")
+
+
+def resoudre_alerte_seuil(equipement_id: int, seuil_id: int) -> None:
+    """Clôture l'alerte de dépassement de seuil si elle était active, et repasse
+    l'équipement en OPERATIONNEL si c'était sa dernière alerte active."""
+    with get_connection() as connexion:
+        alerte = connexion.execute(
+            "SELECT id FROM alerte WHERE equipement_id = ? AND seuil_id = ? AND etat = 'ACTIVE'",
+            (equipement_id, seuil_id),
+        ).fetchone()
+        if alerte is None:
+            return
+        _cloturer_alerte(connexion, alerte["id"], equipement_id)
+
+
+def declencher_alerte_interface(equipement_id: int, interface_id: int, interface_nom: str) -> None:
+    """Crée l'alerte "interface supervisée indisponible" si elle n'existe pas déjà, et passe
+    l'équipement en DEGRADE."""
+    with get_connection() as connexion:
+        deja_active = connexion.execute(
+            "SELECT 1 FROM alerte WHERE equipement_id = ? AND interface_id = ? AND etat = 'ACTIVE'",
+            (equipement_id, interface_id),
+        ).fetchone()
+        if deja_active:
+            return
+        message = f"Interface {interface_nom} indisponible (DOWN)"
+        connexion.execute(
+            "INSERT INTO alerte (equipement_id, type_alerte, interface_id, message) "
+            "VALUES (?, 'INTERFACE_INDISPONIBLE', ?, ?)",
+            (equipement_id, interface_id, message),
+        )
+        _degrader_si_necessaire(connexion, equipement_id)
+
+
+def resoudre_alerte_interface(equipement_id: int, interface_id: int) -> None:
+    """Clôture l'alerte "interface indisponible" si elle était active (l'interface est
+    revenue UP, ou n'est plus supervisée), et repasse l'équipement en OPERATIONNEL si
+    c'était sa dernière alerte active."""
+    with get_connection() as connexion:
+        alerte = connexion.execute(
+            "SELECT id FROM alerte WHERE equipement_id = ? AND interface_id = ? AND etat = 'ACTIVE'",
+            (equipement_id, interface_id),
+        ).fetchone()
+        if alerte is None:
+            return
+        _cloturer_alerte(connexion, alerte["id"], equipement_id)
+
+
+def declencher_alerte_interface_utilisation(equipement_id: int, interface_id: int, seuil_id: int,
+                                             valeur: float, nom_interface: str) -> None:
+    """Crée l'alerte de dépassement de seuil sur le taux d'utilisation de cette interface si
+    elle n'existe pas déjà (seuil_id ET interface_id dans la recherche, pour ne pas se
+    confondre avec une alerte "interface indisponible" sur la même interface), et passe
+    l'équipement en DEGRADE."""
+    with get_connection() as connexion:
+        deja_active = connexion.execute(
+            "SELECT 1 FROM alerte WHERE equipement_id = ? AND interface_id = ? AND seuil_id = ? "
+            "AND etat = 'ACTIVE'",
+            (equipement_id, interface_id, seuil_id),
+        ).fetchone()
+        if deja_active:
+            return
+        message = f"Interface « {nom_interface} » utilisée à {valeur:.1f}%, seuil dépassé"
+        connexion.execute(
+            "INSERT INTO alerte (equipement_id, type_alerte, seuil_id, interface_id, valeur_mesuree, message) "
+            "VALUES (?, 'SEUIL_DEPASSE', ?, ?, ?, ?)",
+            (equipement_id, seuil_id, interface_id, valeur, message),
+        )
+        _degrader_si_necessaire(connexion, equipement_id)
+
+
+def resoudre_alerte_interface_utilisation(equipement_id: int, interface_id: int, seuil_id: int) -> None:
+    """Clôture l'alerte de seuil sur le taux d'utilisation de cette interface si elle était
+    active (repassée sous le seuil, ou plus supervisée), et repasse l'équipement en
+    OPERATIONNEL si c'était sa dernière alerte active."""
+    with get_connection() as connexion:
+        alerte = connexion.execute(
+            "SELECT id FROM alerte WHERE equipement_id = ? AND interface_id = ? AND seuil_id = ? "
+            "AND etat = 'ACTIVE'",
+            (equipement_id, interface_id, seuil_id),
+        ).fetchone()
+        if alerte is None:
+            return
+        _cloturer_alerte(connexion, alerte["id"], equipement_id)
+
+
+def declencher_alerte_volume(equipement_id: int, volume_id: int, seuil_id: int,
+                              valeur: float, nom_volume: str) -> None:
+    """Crée l'alerte de dépassement de seuil sur ce volume si elle n'existe pas déjà
+    (un volume donné peut avoir sa propre alerte, comme une interface), et passe
+    l'équipement en DEGRADE."""
+    with get_connection() as connexion:
+        deja_active = connexion.execute(
+            "SELECT 1 FROM alerte WHERE equipement_id = ? AND volume_id = ? AND etat = 'ACTIVE'",
+            (equipement_id, volume_id),
+        ).fetchone()
+        if deja_active:
+            return
+        message = f"Stockage « {nom_volume} » à {valeur:.1f}%, seuil dépassé"
+        connexion.execute(
+            "INSERT INTO alerte (equipement_id, type_alerte, seuil_id, volume_id, valeur_mesuree, message) "
+            "VALUES (?, 'SEUIL_DEPASSE', ?, ?, ?, ?)",
+            (equipement_id, seuil_id, volume_id, valeur, message),
+        )
+        _degrader_si_necessaire(connexion, equipement_id)
+
+
+def resoudre_alerte_volume(equipement_id: int, volume_id: int) -> None:
+    """Clôture l'alerte de seuil sur ce volume si elle était active (repassé sous le
+    seuil, ou plus supervisé), et repasse l'équipement en OPERATIONNEL si c'était sa
+    dernière alerte active."""
+    with get_connection() as connexion:
+        alerte = connexion.execute(
+            "SELECT id FROM alerte WHERE equipement_id = ? AND volume_id = ? AND etat = 'ACTIVE'",
+            (equipement_id, volume_id),
+        ).fetchone()
+        if alerte is None:
+            return
+        _cloturer_alerte(connexion, alerte["id"], equipement_id)
+
+
+def lister_alertes(etat: str | None = "ACTIVE", equipement_id: int | None = None) -> list[sqlite3.Row]:
+    """Alertes, les plus récentes en premier, filtrables par état (None = toutes) et/ou
+    par équipement (utilisé sur la fiche équipement pour expliquer un statut DEGRADE)."""
+    condition = "1 = 1"
+    parametres: list = []
+    if etat:
+        condition += " AND alerte.etat = ?"
+        parametres.append(etat)
+    if equipement_id is not None:
+        condition += " AND alerte.equipement_id = ?"
+        parametres.append(equipement_id)
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT alerte.*, equipement.nom AS equipement_nom "
+            "FROM alerte JOIN equipement ON equipement.id = alerte.equipement_id "
+            f"WHERE {condition} ORDER BY alerte.date_declenchement DESC",
+            parametres,
+        ).fetchall()

@@ -82,6 +82,25 @@ CREATE TABLE IF NOT EXISTS interface (
     UNIQUE (equipement_id, index_snmp)
 );
 
+-- Volume de stockage réel d'un équipement (hrStorageTable, type "disque fixe" : malgré le
+-- nom SNMP, ce sont des points de montage, pas des disques physiques). On ne garde que les
+-- points de montage qui représentent un vrai espace de stockage (racine "/", ou "/volumeN"
+-- façon NAS Synology) : les montages internes (Docker, pseudo-systèmes de fichiers comme
+-- /proc ou /tmp...) ne sont même pas insérés ici, cf. app/collecte.py. Comme pour les
+-- interfaces : plusieurs volumes possibles par équipement, chacun supervisable
+-- individuellement.
+CREATE TABLE IF NOT EXISTS volume (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id       INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    index_snmp          INTEGER NOT NULL,   -- hrStorageIndex
+    nom                 TEXT NOT NULL,      -- nom convivial (ex. "Volume 1"), pas le chemin SNMP
+    taille_octets       INTEGER,            -- hrStorageSize * hrStorageAllocationUnits
+    utilise_octets      INTEGER,            -- hrStorageUsed * hrStorageAllocationUnits
+    pourcentage_utilise REAL,               -- dernier relevé connu (NULL = jamais relevé)
+    visible             INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0, 1)),
+    UNIQUE (equipement_id, index_snmp)
+);
+
 -- Relevé d'une métrique à un instant donné, pour un équipement (et son interface si la
 -- métrique est par_interface). valeur = NULL signifie que l'équipement n'a pas répondu à cet
 -- instant (un trou dans les courbes), pas une valeur nulle.
@@ -114,4 +133,33 @@ CREATE TABLE IF NOT EXISTS erreur_collecte (
     type_erreur   TEXT NOT NULL CHECK (type_erreur IN
         ('INJOIGNABLE', 'ECHEC_AUTHENTIFICATION', 'INDICATEUR_NON_SUPPORTE', 'VALEUR_ABERRANTE')),
     message       TEXT
+);
+
+-- Seuil global par métrique (au plus un par métrique, pas de surcharge par équipement :
+-- cf. cahier des charges). Au-delà, les équipements qui mesurent cette métrique sont en alerte.
+CREATE TABLE IF NOT EXISTS seuil (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    metrique_id   INTEGER NOT NULL UNIQUE REFERENCES metrique(id),
+    operateur     TEXT NOT NULL CHECK (operateur IN
+        ('SUPERIEUR', 'SUPERIEUR_OU_EGAL', 'INFERIEUR', 'INFERIEUR_OU_EGAL')),
+    valeur_seuil  REAL NOT NULL,
+    actif         INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1))
+);
+
+-- Alerte visuelle uniquement (jamais d'e-mail/SMS). cause_racine_id et le type INDISPONIBILITE
+-- sont déjà prévus par le modèle mais pas encore utilisés (corrélation cause racine à venir).
+CREATE TABLE IF NOT EXISTS alerte (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id      INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    type_alerte        TEXT NOT NULL CHECK (type_alerte IN
+        ('INDISPONIBILITE', 'SEUIL_DEPASSE', 'INTERFACE_INDISPONIBLE')),
+    etat               TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (etat IN ('ACTIVE', 'CLOTUREE', 'MASQUEE')),
+    date_declenchement TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    date_cloture       TEXT,
+    valeur_mesuree     REAL,
+    message            TEXT NOT NULL,
+    seuil_id           INTEGER REFERENCES seuil(id) ON DELETE SET NULL,      -- ssi SEUIL_DEPASSE
+    interface_id       INTEGER REFERENCES interface(id) ON DELETE SET NULL, -- ssi INTERFACE_INDISPONIBLE
+    volume_id          INTEGER REFERENCES volume(id) ON DELETE SET NULL,    -- ssi seuil sur un volume
+    cause_racine_id    INTEGER REFERENCES alerte(id)       -- requis ssi etat = MASQUEE
 );

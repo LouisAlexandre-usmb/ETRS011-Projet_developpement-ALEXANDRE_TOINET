@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block titre %}Alertes · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <section class="carte">
+    <div class="carte-titre"><h2>Seuils globaux</h2></div>
+    <p class="meta">Chaque seuil s'applique à tous les équipements qui mesurent cette métrique.
+      Laissez le champ valeur vide pour désactiver la vérification.</p>
+
+    {% for s in seuils %}
+      <form method="post" action="/seuils" class="formulaire formulaire-ligne">
+        <input type="hidden" name="metrique_id" value="{{ s.metrique_id }}">
+        <label>{{ s.libelle }}
+          <select name="operateur">
+            <option value="SUPERIEUR" {{ 'selected' if s.operateur == 'SUPERIEUR' }}>supérieur à</option>
+            <option value="SUPERIEUR_OU_EGAL" {{ 'selected' if s.operateur == 'SUPERIEUR_OU_EGAL' }}>supérieur ou égal à</option>
+            <option value="INFERIEUR" {{ 'selected' if s.operateur == 'INFERIEUR' }}>inférieur à</option>
+            <option value="INFERIEUR_OU_EGAL" {{ 'selected' if s.operateur == 'INFERIEUR_OU_EGAL' }}>inférieur ou égal à</option>
+          </select>
+        </label>
+        <label>Valeur{% if s.unite %} ({{ s.unite }}){% endif %}, vide = aucun seuil
+          <input type="number" step="0.1" name="valeur_seuil"
+                 value="{{ s.valeur_seuil if s.valeur_seuil is not none else '' }}"
+                 placeholder="aucun seuil">
+        </label>
+        <button type="submit">Enregistrer</button>
+      </form>
+    {% endfor %}
+  </section>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>Alertes actives</h2>
+      <span class="meta">{{ alertes|length }}</span>
+    </div>
+    <table class="tableau">
+      <thead><tr><th>Déclenchée le</th><th>Équipement</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for a in alertes %}
+          <tr>
+            <td>{{ a.date_declenchement | date_fr }}</td>
+            <td><a href="/equipements/{{ a.equipement_id }}">{{ a.equipement_nom }}</a></td>
+            <td>{{ a.message }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="meta">Aucune alerte active pour l'instant.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

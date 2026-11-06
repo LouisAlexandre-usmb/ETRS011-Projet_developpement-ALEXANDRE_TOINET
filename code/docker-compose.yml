@@ -27,15 +27,25 @@ services:
 
   # Faux équipements réseau : des agents SNMP v2c (Net-SNMP) pour tester sans matériel,
   # avec des identités différentes. Les deux derniers excluent volontairement
-  # HOST-RESOURCES-MIB pour simuler un OS embarqué propriétaire (cf. leur snmpd.conf).
+  # HOST-RESOURCES-MIB pour simuler un OS embarqué propriétaire (cf. leur snmpd.conf). Les
+  # trois premiers (modèle générique) reçoivent un volume tmpfs monté sur /volume1 : la
+  # racine d'un conteneur Docker est en overlayfs, un type de système de fichiers que
+  # Net-SNMP ne détecte pas comme du stockage (contrairement à ext4/btrfs sur un vrai
+  # serveur), donc sans ce montage le test de collecte du stockage n'aurait rien à lire.
   snmp-agent:
     build: ./agents-test/snmp-agent
+    tmpfs:
+      - /volume1:size=200m
 
   snmp-agent-routeur:
     build: ./agents-test/snmp-agent-routeur
+    tmpfs:
+      - /volume1:size=200m
 
   snmp-agent-serveur:
     build: ./agents-test/snmp-agent-serveur
+    tmpfs:
+      - /volume1:size=200m
 
   snmp-agent-switch-embarque:
     build: ./agents-test/snmp-agent-switch-embarque

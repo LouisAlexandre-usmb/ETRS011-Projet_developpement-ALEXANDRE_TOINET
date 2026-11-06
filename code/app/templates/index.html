@@ -5,12 +5,10 @@
 {% block contenu %}
   <div class="tableau-bord-colonnes">
     <div>
-    <section class="carte">
-      <div class="carte-titre">
-        <h2>Tableau de bord</h2>
-        <span class="meta">{{ equipements|length }} équipement(s)</span>
-      </div>
-    </section>
+    <div class="page-titre">
+      <h2>Tableau de bord</h2>
+      <span class="meta">{{ equipements|length }} équipement(s)</span>
+    </div>
 
     {% if equipements %}
       {% for groupe_nom, equips in equipements|groupby('groupe_nom') %}

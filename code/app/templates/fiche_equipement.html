@@ -15,6 +15,11 @@
       </h2>
       <button type="button" id="ouvrir-dialog-collecte" class="bouton-discret">⚙ Paramètres de collecte</button>
     </div>
+    {% if alertes_actives %}
+      <div class="bandeau-degrade">
+        {% for a in alertes_actives %}{{ a.message }}{% if not loop.last %} · {% endif %}{% endfor %}
+      </div>
+    {% endif %}
     <dl class="infos-ligne">
       <div><dt>Adresse</dt><dd><code>{{ equipement.adresse }}</code></dd></div>
       <div><dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd></div>
@@ -61,7 +66,7 @@
           <label class="meta" for="selecteur-interface">Interface</label>
           <select id="selecteur-interface" class="select-leger">
             {% for itf in interfaces if itf.visible %}
-              <option value="{{ itf.id }}">{{ itf.nom }} ({{ itf.statut }})</option>
+              <option value="{{ itf.id }}">{{ itf.nom }}</option>
             {% endfor %}
           </select>
         </div>
@@ -79,18 +84,17 @@
     {% if not codes_actifs %}
       <p class="meta">Aucune métrique active pour le modèle de supervision de cet équipement.</p>
     {% endif %}
-    <p class="meta">Le trafic affiché est le compteur brut (octets cumulés) tel que relevé par
-      SNMP, pas encore un débit — le calcul du débit (différence entre deux relevés) n'est pas
-      encore implémenté.</p>
   </section>
 
   <section class="carte" id="interfaces">
     <div class="carte-titre">
-      <h2>Interfaces supervisées</h2>
+      <h2>Interfaces</h2>
       <span class="meta">{{ interfaces|selectattr('visible')|list|length }} sur {{ interfaces|length }}</span>
     </div>
     <table class="tableau">
-      <thead><tr><th>Nom</th><th>Statut</th><th>Vitesse</th><th></th></tr></thead>
+      <thead>
+        <tr><th>Nom</th><th>Statut</th><th>Capacité nominale</th><th>Pourcentage d'utilisation</th><th></th></tr>
+      </thead>
       <tbody>
         {% for itf in interfaces if itf.visible %}
           <tr>
@@ -104,38 +108,93 @@
               {% if itf.vitesse %}{{ (itf.vitesse / 1000000) | round(1) }} Mb/s{% else %}—{% endif %}
             </td>
             <td>
+              {% set taux = utilisations_interfaces.get(itf.id) %}
+              {{ (taux | round(1) ~ ' %') if taux is not none else '—' }}
+            </td>
+            <td>
               <form method="post" action="/interfaces/{{ itf.id }}/basculer-visibilite">
                 <button type="submit" class="bouton-discret">Ne plus superviser</button>
               </form>
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="4" class="meta">Aucune interface affichée pour l'instant.</td></tr>
+          <tr><td colspan="5" class="meta">Aucune interface affichée pour l'instant.</td></tr>
         {% endfor %}
       </tbody>
     </table>
+
+    {% set interfaces_masquees = interfaces|rejectattr('visible')|list %}
+    {% if interfaces_masquees %}
+      <details class="sous-section">
+        <summary>Interfaces non supervisées ({{ interfaces_masquees|length }})</summary>
+        <table class="tableau">
+          <thead><tr><th>Nom</th><th></th></tr></thead>
+          <tbody>
+            {% for itf in interfaces_masquees %}
+              <tr>
+                <td>{{ itf.nom }}</td>
+                <td>
+                  <form method="post" action="/interfaces/{{ itf.id }}/basculer-visibilite">
+                    <button type="submit" class="bouton-discret">Superviser</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </details>
+    {% endif %}
   </section>
 
-  {% set interfaces_masquees = interfaces|rejectattr('visible')|list %}
-  {% if interfaces_masquees %}
-    <details class="carte">
-      <summary>Interfaces non supervisées ({{ interfaces_masquees|length }})</summary>
+  {% if volumes %}
+    <section class="carte" id="volumes">
+      <div class="carte-titre">
+        <h2>Stockage</h2>
+        <span class="meta">{{ volumes|selectattr('visible')|list|length }} sur {{ volumes|length }}</span>
+      </div>
       <table class="tableau">
-        <thead><tr><th>Nom</th><th></th></tr></thead>
+        <thead><tr><th>Volume</th><th>Utilisé</th><th>Taille</th><th>Libre</th><th></th></tr></thead>
         <tbody>
-          {% for itf in interfaces_masquees %}
+          {% for v in volumes if v.visible %}
             <tr>
-              <td>{{ itf.nom }}</td>
+              <td>{{ v.nom }}</td>
+              <td>{{ (v.pourcentage_utilise | round(1)) ~ ' %' if v.pourcentage_utilise is not none else '—' }}</td>
+              <td>{{ ((v.taille_octets / 1024**3) | round(1) ~ ' Go') if v.taille_octets is not none else '—' }}</td>
+              <td>{{ (((v.taille_octets - v.utilise_octets) / 1024**3) | round(1) ~ ' Go') if v.taille_octets is not none and v.utilise_octets is not none else '—' }}</td>
               <td>
-                <form method="post" action="/interfaces/{{ itf.id }}/basculer-visibilite">
-                  <button type="submit" class="bouton-discret">Superviser</button>
+                <form method="post" action="/volumes/{{ v.id }}/basculer-visibilite">
+                  <button type="submit" class="bouton-discret">Ne plus superviser</button>
                 </form>
               </td>
             </tr>
+          {% else %}
+            <tr><td colspan="5" class="meta">Aucun volume affiché pour l'instant.</td></tr>
           {% endfor %}
         </tbody>
       </table>
-    </details>
+
+      {% set volumes_masques = volumes|rejectattr('visible')|list %}
+      {% if volumes_masques %}
+        <details class="sous-section">
+          <summary>Volumes non supervisés ({{ volumes_masques|length }})</summary>
+          <table class="tableau">
+            <thead><tr><th>Volume</th><th></th></tr></thead>
+            <tbody>
+              {% for v in volumes_masques %}
+                <tr>
+                  <td>{{ v.nom }}</td>
+                  <td>
+                    <form method="post" action="/volumes/{{ v.id }}/basculer-visibilite">
+                      <button type="submit" class="bouton-discret">Superviser</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </details>
+      {% endif %}
+    </section>
   {% endif %}
 
   <dialog id="dialog-collecte">
@@ -259,6 +318,10 @@
       chargerSerie("if_in_octets", selecteur.value),
       chargerSerie("if_out_octets", selecteur.value),
     ]);
+    // Le débit est calculé côté serveur en octets/s (unité native des compteurs SNMP), mais
+    // les débits réseau se lisent conventionnellement en bits/s : conversion à l'affichage
+    // seulement, pour rester comparable à la vitesse de l'interface (déjà affichée en Mb/s).
+    const versMbps = (octetsParSeconde) => octetsParSeconde === null ? null : octetsParSeconde * 8 / 1_000_000;
     const etiquettes = entrant.map((m) => formaterEtiquette(m.horodatage));
     if (graphiques["graphique-trafic"]) graphiques["graphique-trafic"].destroy();
     graphiques["graphique-trafic"] = new Chart(document.getElementById("graphique-trafic"), {
@@ -266,11 +329,11 @@
       data: {
         labels: etiquettes,
         datasets: [
-          { label: "Entrant (octets)", data: entrant.map((m) => m.valeur), borderColor: "#17707F" },
-          { label: "Sortant (octets)", data: sortant.map((m) => m.valeur), borderColor: "#B45514" },
+          { label: "Entrant (Mb/s)", data: entrant.map((m) => versMbps(m.valeur)), borderColor: "#17707F" },
+          { label: "Sortant (Mb/s)", data: sortant.map((m) => versMbps(m.valeur)), borderColor: "#B45514" },
         ],
       },
-      options: { animation: false },
+      options: { animation: false, scales: { y: { beginAtZero: true } } },
     });
   }
 

@@ -54,8 +54,12 @@
             <td>{{ ligne.horodatage | date_fr }}</td>
             <td><a href="/equipements/{{ ligne.equipement_id }}">{{ ligne.equipement_nom }}</a></td>
             <td>
-              <span class="pastille {{ 'type-erreur' if ligne.type_log == 'ERREUR_COLLECTE' else 'type-statut' }}">
-                {{ 'Erreur' if ligne.type_log == 'ERREUR_COLLECTE' else 'Statut' }}
+              <span class="pastille {{ 'type-erreur' if ligne.type_log == 'ERREUR_COLLECTE'
+                                    else 'type-alerte' if ligne.type_log == 'ALERTE'
+                                    else 'type-statut' }}">
+                {{ 'Erreur' if ligne.type_log == 'ERREUR_COLLECTE'
+                   else 'Alerte' if ligne.type_log == 'ALERTE'
+                   else 'Statut' }}
               </span>
             </td>
             <td>{{ ligne.detail }}</td>
