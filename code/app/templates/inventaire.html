@@ -132,6 +132,42 @@
     {% endif %}
   </details>
 
+  <details class="carte" id="modeles">
+    <summary><h2>Modèles</h2></summary>
+    <p class="meta">Tous les modèles sont livrés avec l'application (<code>modeles_integres.json</code>) : ils fonctionnent sans Internet et ne se modifient pas. À l'ajout d'un équipement, l'application reconnaît son constructeur (sysObjectID, sysDescr) et lui attribue le modèle qui répond le mieux ; sinon l'hôte standard, ou le générique.</p>
+
+    <h3 class="sous-titre">Modèles de supervision</h3>
+    <p class="meta">Ils fixent les indicateurs soumis aux seuils et aux alertes : CPU, mémoire et disque.</p>
+    <table class="tableau">
+      <thead><tr><th>Modèle</th><th>Indicateurs</th><th>Équipements</th></tr></thead>
+      <tbody>
+        {% for m in modeles_detail %}
+          <tr>
+            <td>{{ m.nom }}{% if m.description %}<br><span class="meta">{{ m.description }}</span>{% endif %}</td>
+            <td>{{ m.indicateurs or '—' }}</td>
+            <td>{% include "_compteur_equipements.html" %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3 class="sous-titre">Modèles d'objets</h3>
+    <p class="meta">Capteurs et objets cherchés sur chaque équipement (ceux d'un constructeur, seulement sur ses équipements) : ils donnent les listes et les graphiques de la fiche.</p>
+    <table class="tableau">
+      <thead><tr><th>Modèle</th><th>Groupes</th><th>Objets détectés</th><th>Équipements</th></tr></thead>
+      <tbody>
+        {% for m in modeles_objets %}
+          <tr>
+            <td>{{ m.texte or m.nom }}{% if m.description %}<br><span class="meta">{{ m.description }}</span>{% endif %}</td>
+            <td>{{ m.mibs|map(attribute='nom')|join(', ') or '—' }}</td>
+            <td>{{ m.nb_objets }}</td>
+            <td>{% include "_compteur_equipements.html" %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+
   <details class="carte" id="groupes">
     <summary><h2>Groupes</h2></summary>
     <form method="post" action="/groupes" class="formulaire formulaire-ligne">

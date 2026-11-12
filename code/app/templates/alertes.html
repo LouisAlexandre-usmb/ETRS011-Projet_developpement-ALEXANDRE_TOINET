@@ -16,7 +16,7 @@
 
   <details class="carte" id="parametres">
     <summary><h2>Collecte et conservation</h2></summary>
-    <p class="meta">Valeurs globales. Un équipement ou l'un de ses services peut avoir ses propres
+    <p class="meta">Valeurs globales. Un équipement peut avoir ses propres
       valeurs, réglées sur sa fiche : elles ne changent pas avec le réglage global. La conservation
       s'applique aux mesures, erreurs, changements de statut et alertes clôturées, à chaque démarrage
       puis toutes les 24 heures.</p>
@@ -42,66 +42,6 @@
         <button type="submit">Enregistrer</button>
       </form>
     {% endif %}
-  </details>
-
-  <details class="carte" id="seuils-globaux">
-    <summary><h2>Seuils et criticité par service</h2></summary>
-    <p class="meta">Seuils globaux, appliqués à tout le parc à chaque collecte : au-dessus du premier
-      l'alerte est un avertissement, au-dessus du second elle devient critique. Un équipement peut
-      avoir ses propres seuils, réglés sur sa fiche : ils ne changent pas avec le réglage global.</p>
-    <table class="tableau">
-      <thead><tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Seuils propres actifs</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr></thead>
-      <tbody>
-        {% for s in seuils %}
-          <tr>
-            {% if utilisateur.est_admin %}
-              <td>{{ s.libelle }}</td>
-              <td><input type="number" name="valeur" min="0" max="100" step="0.1" value="{{ s.valeur }}" required
-                         aria-label="Avertissement {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
-              <td><input type="number" name="valeur_critique" min="0" max="100" step="0.1" value="{{ s.valeur_critique }}" required
-                         aria-label="Critique {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"></td>
-              <td>{{ s.nb_personnalises }} équipement(s)</td>
-              <td>
-                <form method="post" action="/seuils" id="seuil-{{ s.metrique_id }}">
-                  <input type="hidden" name="metrique_id" value="{{ s.metrique_id }}">
-                  <button type="submit">Enregistrer</button>
-                </form>
-              </td>
-            {% else %}
-              <td>{{ s.libelle }}</td><td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ s.nb_personnalises }} équipement(s)</td>
-            {% endif %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-
-    <h3 class="sous-titre">Alertes sans seuil</h3>
-    <table class="tableau">
-      <thead><tr><th>Type d'alerte</th><th>Criticité</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr></thead>
-      <tbody>
-        {% for c in criticites %}
-          <tr>
-            <td>{{ c.libelle }}</td>
-            {% if utilisateur.est_admin %}
-              <td>
-                <select name="criticite" aria-label="Criticité {{ c.libelle }}" form="criticite-{{ c.code }}">
-                  <option value="AVERTISSEMENT" {{ 'selected' if c.criticite == 'AVERTISSEMENT' }}>Avertissement</option>
-                  <option value="CRITIQUE" {{ 'selected' if c.criticite == 'CRITIQUE' }}>Critique</option>
-                </select>
-              </td>
-              <td>
-                <form method="post" action="/criticites" id="criticite-{{ c.code }}">
-                  <input type="hidden" name="code" value="{{ c.code }}">
-                  <button type="submit">Enregistrer</button>
-                </form>
-              </td>
-            {% else %}
-              <td>{{ 'Critique' if c.criticite == 'CRITIQUE' else 'Avertissement' }}</td>
-            {% endif %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
   </details>
 
   <details class="carte" id="alertes-cloturees">

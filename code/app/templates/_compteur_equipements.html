@@ -1,0 +1,5 @@
+{# Compteur d'équipements d'un modèle : leurs noms au survol, ou au clavier (focus) #}
+{% if m.nb_equipements %}
+  <span class="compteur-equipements" tabindex="0" data-noms="{{ m.noms_equipements }}"
+        title="{{ m.noms_equipements }}" aria-label="{{ m.nb_equipements }} équipement(s) : {{ m.noms_equipements }}">{{ m.nb_equipements }}</span>
+{% else %}0{% endif %}

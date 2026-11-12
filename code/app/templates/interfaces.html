@@ -5,11 +5,14 @@
 {% block contenu %}
   <a href="/equipements/{{ equipement.id }}" class="lien-retour">&larr; Fiche de {{ equipement.nom }}</a>
 
-  {% if modele_non_identifie %}
+  {% if identification %}
     <p class="bandeau-info">
-      <strong>Modèle non identifié, CPU et RAM indisponibles.</strong>
-      L'équipement est supervisé avec le modèle générique : seuls sa disponibilité et son trafic remonteront.
-      Si vous connaissez son modèle, vous pouvez le changer depuis <a href="/equipements/{{ equipement.id }}#collecte">sa fiche</a>.
+      {% if acces_internet %}
+        <strong>Identification du système en cours.</strong>
+        Son constructeur est reconnu (Cisco, Aruba, QNAP, Synology), puis le modèle qui répond le mieux lui est attribué à l'équipement : cela peut prendre une minute. Le résultat apparaît sur <a href="/equipements/{{ equipement.id }}#collecte">sa fiche</a>.
+      {% else %}
+        <strong>Pas d'accès à Internet :</strong> l'équipement utilise un modèle intégré. Vous pourrez relancer l'identification depuis <a href="/equipements/{{ equipement.id }}#collecte">sa fiche</a> une fois le réseau rétabli.
+      {% endif %}
     </p>
   {% endif %}
 

@@ -21,9 +21,24 @@ L'outil est pensé pour un usage local, sur un unique poste de travail (pas de h
  
 Le projet est **en cours de développement**.
 
-- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes (création et suppression) et relations parent-enfant, modèles de supervision détectés automatiquement selon les indicateurs qui répondent (générique par défaut, Cisco, Linux), tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, seuils d'avertissement et critiques par service (globaux ou propres à un équipement), alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP), corrélation des pannes par cause racine, onglet Historique avec recherche et filtre par catégorie, recherche et filtres du tableau de bord, intervalle de polling, échecs avant alerte et conservation des données réglables globalement, par équipement et par service (conservation : global et équipement).
+- **Disponible** : gestion de l'inventaire avec test de connectivité SNMP (v1 ou v2c), groupes (création et suppression) et relations parent-enfant, modèles intégrés (générique, hôte standard, Cisco, Aruba, QNAP, Synology, capteurs matériels, onduleur, imprimante), attribués automatiquement à l'ajout d'un équipement selon son constructeur reconnu, capteurs et objets détectés en listes et graphiques, capacité disque et mémoire en tailles (par volume), uptime en compteur, tableau de bord, connexion avec les rôles `admin` et `lecteur`, collecte périodique du statut et des mesures, débit par interface, fiche équipement avec graphiques, choix des interfaces à surveiller, choix des services à garder (mesures et objets détectés), seuils d'avertissement et critiques réglés sur chaque équipement pour chaque service gardé (supérieur à, inférieur à ou égal à, dans l'unité du service : %, Mb/s, minutes, °C, état…), alertes séparant les équipements injoignables (ping) des services en erreur (relevé SNMP) et des interfaces suivies passées « down » (physiques ou VLAN), corrélation des pannes par cause racine, onglet Logs (statuts, erreurs de collecte, alertes) avec recherche, filtres et pagination, santé du parc en camembert, recherche et filtres du tableau de bord, intervalle de polling, échecs avant alerte et conservation des données réglables globalement, par équipement et par service (conservation : global et équipement).
 - **Préparé en base, sans interface** : délai de réponse SNMP et période de rafraîchissement.
 - **À réaliser** : choix de la période des graphiques, agrégation des données anciennes, découverte de la topologie.
+
+### Modèles
+
+Tous les modèles sont livrés avec l'application, dans [`code/app/modeles_integres.json`](code/app/modeles_integres.json). Ils fonctionnent sans Internet et ne se modifient pas depuis l'interface (**Gestion de l'inventaire → Modèles**).
+
+- **Modèles génériques** : *Équipement générique* (disponibilité, uptime, trafic) et *Hôte standard* (CPU, mémoire sans le cache et disques par HOST-RESOURCES-MIB, ou UCD-SNMP-MIB en secours).
+- **Modèles des constructeurs** : *Switch Cisco* (CPU par CISCO-PROCESS-MIB, mémoire par CISCO-MEMORY-POOL-MIB), *Switch Aruba (HP ProCurve)* (STATISTICS-MIB, NETSWITCH-MIB), *NAS QNAP* et *NAS Synology* (HOST-RESOURCES-MIB), chacun avec ses capteurs : températures, ventilateurs, états des disques, du RAID, des alimentations…
+- **Modèles d'objets génériques** : *Capteurs matériels* (ENTITY-SENSOR-MIB), *Onduleur* (UPS-MIB) et *Imprimante* (Printer-MIB).
+
+À l'ajout d'un équipement, l'application reconnaît son constructeur grâce aux règles du fichier (début du `sysObjectID`, texte du `sysDescr`, lecture d'un OID), puis lui attribue le modèle qui fournit le plus d'indicateurs : celui du constructeur, sinon l'hôte standard, sinon le générique. Les capteurs d'un constructeur ne sont cherchés que sur ses équipements.
+
+### Logs et santé du parc
+
+- L'onglet **Logs** réunit les changements de statut, les erreurs de collecte et les alertes de tout le parc, du plus récent au plus ancien. On peut les filtrer par équipement, créneau de dates, catégorie (statut, erreur, avertissement, critique) et texte, avec 50 lignes par page.
+- Le **tableau de bord** affiche la santé du parc : le nombre d'équipements opérationnels, dégradés, indisponibles et en attente, et leur répartition en camembert.
 
 ### Lancer le projet
 

@@ -4,22 +4,23 @@
 - API JSON             : /api/...
 """
 import itertools
+import json
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, collecte, config, db, metriques
+from app import auth, collecte, config, db, internet, metriques, seuils
 from app.auth import AccesRefuse, NonConnecte, exiger_admin, utilisateur_courant
 from app.snmp_client import SnmpError, lire_infos_systeme
 from app.utilisateurs import Utilisateur
@@ -34,9 +35,11 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)  # sinon une ligne to
 async def lifespan(app: FastAPI):
     db.init_db()
     db.purger_donnees_anciennes()  # rattrape un retard pris pendant un arrêt prolongé
+    internet.demarrer()
     collecte.demarrer()
     yield
     collecte.arreter()
+    internet.arreter()
 
 
 app = FastAPI(title="Supervision SNMP", version="0.2.0", lifespan=lifespan)
@@ -80,6 +83,21 @@ def version_statique() -> int:
 for environnement in (templates.env, auth.templates.env):  # base.html est aussi rendu par auth.py
     environnement.globals["version_statique"] = version_statique
 templates.env.filters["date_fr"] = formater_date_fr
+
+
+def formater_taille(octets) -> str:
+    """Taille lisible en unités binaires : 1536 -> « 1.5 KB », 3.2e12 -> « 2.91 TB »."""
+    if octets is None:
+        return "—"
+    taille = float(octets)
+    for unite in ("B", "KB", "MB", "GB", "TB"):
+        if abs(taille) < 1024 or unite == "TB":
+            return f"{taille:.0f} {unite}" if unite == "B" else f"{taille:.2f} {unite}".replace(".00 ", " ")
+        taille /= 1024
+    return f"{taille:.2f} TB"
+
+
+templates.env.filters["taille"] = formater_taille
 templates.env.globals["periode_rafraichissement"] = lambda: db.obtenir_parametres_generaux()["periode_rafraichissement"]
 
 
@@ -96,18 +114,13 @@ class NouvelEquipement(BaseModel):
 
 
 class SeuilEquipement(BaseModel):
-    """Corps attendu par POST /api/equipements/{id}/seuils."""
-    metrique_id: int
-    valeur: float = Field(ge=0, le=100)
-    valeur_critique: float = Field(ge=0, le=100)
+    """Corps attendu par POST /api/equipements/{id}/seuils. `cible` : « m<id> » pour un service de
+    mesure, « o<id> » pour un objet détecté (voir GET /api/equipements/{id}/seuils)."""
+    cible: str
+    operateur: Literal[">", "<", "="] = ">"
+    avertissement: float | None = None
+    critique: float | None = None
     actif: bool = True
-
-
-class SeuilAModifier(BaseModel):
-    """Corps attendu par POST /api/seuils."""
-    metrique_id: int
-    valeur: float = Field(ge=0, le=100)
-    valeur_critique: float = Field(ge=0, le=100)
 
 
 # Réglage -> (libellé, colonne de la valeur globale, minimum, maximum). Le minimum de l'intervalle
@@ -160,14 +173,71 @@ def _sections_tableau_de_bord(equipements: list, alertes: list, filtre_actif: bo
     return sections
 
 
-def _erreur_seuil_equipement(id_equipement: int, metrique_id: int, valeur: float,
-                              valeur_critique: float) -> str | None:
-    """Vérifie un seuil propre à un équipement ; renvoie le message d'erreur, ou None."""
-    if metrique_id not in {seuil["metrique_id"] for seuil in db.seuils_de_l_equipement(id_equipement)}:
-        return "Ce service n'est pas surveillé par cet équipement"
-    if not 0 <= valeur <= valeur_critique <= 100:
-        return "Seuils invalides : entre 0 et 100 %, l'avertissement ne dépassant pas le niveau critique"
+MAX_LIGNES_TABLE = 30
+
+
+def _objets_de_la_fiche(id_equipement: int) -> dict:
+    """Prépare les listes et les graphiques de la fiche à partir des objets détectés (ceux que
+    l'admin a choisi de garder)."""
+    tous = db.lister_objets_detectes(id_equipement)
+    objets = [objet for objet in tous if objet["garde"]]
+    valeurs: dict[int, dict[str, str]] = {}
+    for ligne in db.lister_valeurs_objets(id_equipement):
+        valeurs.setdefault(ligne["objet_id"], {})[ligne["instance"]] = ligne["valeur"]
+
+    def affichage(objet, valeur):
+        return json.loads(objet["etats"] or "{}").get(str(valeur), valeur) if valeur is not None else "—"
+
+    simples, tableaux, graphiques = [], {}, []
+    for objet in objets:
+        # Un capteur qui porte le nom de sa propre table est une valeur unique (température
+        # du système, état de l'alimentation...) : il rejoint les valeurs simples
+        if objet["table_nom"] and objet["table_nom"] != objet["objet"]:
+            # Une même table regroupe ses colonnes, même relevées par des capteurs différents
+            # (température et état d'une alimentation, par exemple)
+            tableaux.setdefault((objet["modele_nom"], objet["table_nom"]), []).append(objet)
+        else:
+            simples.append({"mib": objet["mib"], "nom": objet["objet"], "description": objet["description"],
+                            "valeur": affichage(objet, next(iter(valeurs.get(objet["id"], {}).values()), None))})
+
+    listes = []
+    for (_, table), colonnes in tableaux.items():
+        mib = ", ".join(dict.fromkeys(c["mib"] for c in colonnes))
+        visibles = [c for c in colonnes if not collecte.OBJET_INDEX.search(c["objet"])] or colonnes
+        instances = sorted({i for c in colonnes for i in valeurs.get(c["id"], {})},
+                           key=lambda i: [int(p) for p in i.split(".") if p.isdigit()])
+        listes.append({
+            "mib": mib, "nom": table, "colonnes": [c["objet"] for c in visibles], "total": len(instances),
+            "descriptions": [c["description"] for c in visibles],
+            "lignes": [[affichage(c, valeurs.get(c["id"], {}).get(i)) for c in visibles] for i in instances[:MAX_LIGNES_TABLE]],
+        })
+    avec_historique = db.objets_avec_historique(id_equipement)
+    for objet in objets:
+        if objet["id"] in avec_historique:
+            graphiques.append({"id": objet["id"], "nom": objet["objet"], "mib": objet["mib"]})
+    return {"simples": simples, "listes": listes, "graphiques": graphiques, "nb_ecartes": len(tous) - len(objets),
+            "nb_total": len(tous)}
+
+
+def _enregistrer_seuil(id_equipement: int, cible: str, operateur: str, avertissement: float | None,
+                       critique: float | None, actif: bool) -> str | None:
+    """Vérifie et enregistre le seuil d'un service gardé de cet équipement ; renvoie l'erreur, ou None."""
+    trouvee = next((c for c in collecte.cibles_de_seuil(id_equipement) if c["cle"] == cible), None)
+    if trouvee is None:
+        return "Ce service n'est pas relevé sur cet équipement"
+    erreur = seuils.valider(trouvee["profil"], operateur, avertissement, critique, actif)
+    if erreur:
+        return erreur
+    db.enregistrer_seuil(id_equipement, trouvee["metrique_id"], trouvee["objet_id"], operateur,
+                         avertissement, critique, actif)
+    collecte.reevaluer_seuils(id_equipement)
     return None
+
+
+def _nombre_saisi(valeur: str) -> float | None:
+    """Champ de formulaire facultatif -> nombre (la virgule décimale est acceptée)."""
+    valeur = (valeur or "").strip().replace(",", ".")
+    return float(valeur) if valeur else None
 
 
 def _erreur_configuration(id_equipement: int | None, version_snmp: str, parent_id: int | None,
@@ -215,7 +285,9 @@ async def tableau_de_bord(request: Request, utilisateur: Connecte):
     return templates.TemplateResponse(request, "index.html", {
         "utilisateur": utilisateur,
         "equipements": equipements,
-        "equipements_filtres": equipements_filtres,
+        "sante": {statut: sum(e["statut"] == statut for e in equipements)
+                  for statut in ("OPERATIONNEL", "DEGRADE", "INDISPONIBLE", "EN_ATTENTE")},
+        "acces_internet": internet.acces_internet(),
         "sections": _sections_tableau_de_bord(equipements_filtres, alertes, filtre_actif) if equipements_filtres else [],
         "filtre_actif": filtre_actif,
         "groupes": db.lister_groupes(),
@@ -243,9 +315,15 @@ async def fiche_equipement(request: Request, id_equipement: int, utilisateur: Co
         "interfaces": [itf for itf in interfaces if itf["suivi"] == "OUI"],
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" and itf["presente"] for itf in interfaces),
         "modeles": db.lister_modeles(),
-        "seuils": db.seuils_de_l_equipement(id_equipement),
-        "services": db.services_de_l_equipement(id_equipement),
-        "codes_actifs": {e["code"] for e in db.lister_elements_actifs(equipement["modele_supervision_id"])},
+        "cibles_seuil": (cibles := collecte.cibles_de_seuil(id_equipement)),
+        "valeurs_actuelles": collecte.valeurs_actuelles(id_equipement, cibles),
+        "operateurs": seuils.OPERATEURS,
+        "codes_actifs": {m["code"] for m in db.metriques_du_modele(id_equipement) if m["garde"]},
+        "objets": _objets_de_la_fiche(id_equipement),
+        "dernieres": db.dernieres_mesures(id_equipement),
+        "volumes": db.derniers_volumes(id_equipement),
+        "identification": "identification" in request.query_params,
+        "nb_modeles_objets": len(db.lister_modeles_objets()),
         "reglages": REGLAGES,
         "alertes": db.lister_alertes(statut="ACTIVE", equipement_id=id_equipement),
         "masquer_correlees": False,
@@ -263,8 +341,6 @@ async def page_alertes(request: Request, utilisateur: Connecte):
         "utilisateur": utilisateur,
         "alertes": db.lister_alertes(statut="ACTIVE"),
         "masquer_correlees": True,
-        "seuils": db.lister_seuils(),
-        "criticites": db.lister_criticites(),
         "parametres": db.obtenir_parametres_generaux(),
         "reglages": REGLAGES,
         "nb_reglages_propres": db.compter_reglages_propres(),
@@ -274,49 +350,48 @@ async def page_alertes(request: Request, utilisateur: Connecte):
     })
 
 
-@app.post("/seuils")
-async def modifier_seuil_html(admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
-                               valeur_critique: float = Form(...)):
-    """Enregistre les seuils d'un service et les applique aussitôt aux dernières mesures."""
-    if (not 0 <= valeur <= valeur_critique <= 100
-            or not db.modifier_seuil(metrique_id, valeur, valeur_critique)):
-        message = "Seuils invalides : entre 0 et 100 %, l'avertissement ne dépassant pas le niveau critique"
-        return RedirectResponse(f"/alertes?erreur={quote(message)}", status_code=303)
-    collecte.reevaluer_seuils_du_parc()
-    return RedirectResponse("/alertes#seuils-globaux", status_code=303)
-
-
-@app.post("/criticites")
-async def modifier_criticite_html(admin: Admin, code: str = Form(...), criticite: str = Form(...)):
-    """Change la criticité d'un type d'alerte qui ne dépend pas d'un seuil."""
-    if criticite not in ("AVERTISSEMENT", "CRITIQUE") or not db.modifier_criticite(code, criticite):
-        return RedirectResponse(f"/alertes?erreur={quote('Criticité invalide')}", status_code=303)
-    return RedirectResponse("/alertes#seuils-globaux", status_code=303)
-
-
 @app.post("/equipements/{id_equipement}/seuils")
 async def enregistrer_seuil_equipement_html(
-    id_equipement: int, admin: Admin, metrique_id: int = Form(...), valeur: float = Form(...),
-    valeur_critique: float = Form(...), actif: str = Form(""),
+    id_equipement: int, admin: Admin, cible: str = Form(...), operateur: str = Form(">"),
+    avertissement: str = Form(""), critique: str = Form(""), actif: str = Form(""),
 ):
-    """Enregistre le seuil propre à cet équipement pour un service ; décoché, il revient au global."""
-    if actif:
-        erreur = _erreur_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique)
-        if erreur:
-            return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#seuils", status_code=303)
-        db.enregistrer_seuil_equipement(id_equipement, metrique_id, valeur, valeur_critique)
-    else:
-        db.supprimer_seuil_equipement(id_equipement, metrique_id)
+    """Enregistre le seuil d'un service de cet équipement (mesure ou objet détecté)."""
+    try:
+        erreur = _enregistrer_seuil(id_equipement, cible, operateur, _nombre_saisi(avertissement),
+                                    _nombre_saisi(critique), bool(actif))
+    except ValueError:
+        erreur = "Valeur numérique invalide"
+    if erreur:
+        return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#seuils", status_code=303)
+    return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/seuils/remise-a-zero")
+async def remettre_a_zero_seuils_html(id_equipement: int, admin: Admin):
+    """Retire tous les seuils réglés sur cet équipement : CPU, RAM et disque reviennent à leurs
+    valeurs par défaut, les autres services n'ont plus de seuil."""
+    db.supprimer_seuils_equipement(id_equipement)
     collecte.reevaluer_seuils(id_equipement)
     return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
 
 
-@app.post("/equipements/{id_equipement}/seuils/{metrique_id}/reinitialiser")
-async def reinitialiser_seuil_equipement_html(id_equipement: int, metrique_id: int, admin: Admin):
-    """Fait revenir un service de cet équipement au réglage global."""
-    db.supprimer_seuil_equipement(id_equipement, metrique_id)
-    collecte.reevaluer_seuils(id_equipement)
+@app.post("/equipements/{id_equipement}/seuils/reinitialiser")
+async def reinitialiser_seuil_equipement_html(id_equipement: int, admin: Admin, cible: str = Form(...)):
+    """Retire le seuil réglé : CPU, RAM et disque reviennent à leur valeur par défaut."""
+    trouvee = next((c for c in collecte.cibles_de_seuil(id_equipement) if c["cle"] == cible), None)
+    if trouvee is not None:
+        db.supprimer_seuil(id_equipement, trouvee["metrique_id"], trouvee["objet_id"])
+        collecte.reevaluer_seuils(id_equipement)
     return RedirectResponse(f"/equipements/{id_equipement}#seuils", status_code=303)
+
+
+@app.post("/equipements/{id_equipement}/modele/identifier")
+async def identifier_modele_html(id_equipement: int, admin: Admin):
+    """Relance l'identification du modèle : constructeur, capteurs, CPU et RAM."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+    collecte.lancer_identification([id_equipement])
+    return RedirectResponse(f"/equipements/{id_equipement}?identification=1#collecte", status_code=303)
 
 
 @app.post("/equipements/{id_equipement}/modele")
@@ -327,6 +402,7 @@ async def changer_modele_html(id_equipement: int, admin: Admin, modele_supervisi
         return RedirectResponse(f"/equipements/{id_equipement}?erreur={quote(erreur)}#collecte", status_code=303)
     db.changer_modele_supervision(id_equipement, modele_supervision_id)
     collecte.reevaluer_seuils(id_equipement)
+    collecte.lancer_detection(id_equipement)
     return RedirectResponse(f"/equipements/{id_equipement}#collecte", status_code=303)
 
 
@@ -346,7 +422,8 @@ async def page_interfaces(request: Request, id_equipement: int, admin: Admin):
         "absentes": [itf for itf in interfaces if not itf["presente"]],
         "proposees": {itf["id"] for itf in presentes if collecte.interface_proposee(itf)},
         "nb_a_valider": sum(itf["suivi"] == "A_VALIDER" for itf in presentes),
-        "modele_non_identifie": "modele_non_identifie" in request.query_params,
+        "identification": "identification" in request.query_params,
+        "acces_internet": internet.acces_internet(),
         "erreur": request.query_params.get("erreur"),
     })
 
@@ -360,6 +437,7 @@ async def enregistrer_interfaces_html(
 ):
     """Enregistre les interfaces cochées ; les autres interfaces affichées sont ignorées."""
     db.enregistrer_choix_interfaces(id_equipement, affichees, surveillees)
+    collecte.reevaluer_interfaces(id_equipement)   # une interface suivie en panne alerte tout de suite
     return RedirectResponse(f"/equipements/{id_equipement}", status_code=303)
 
 
@@ -400,33 +478,6 @@ async def modifier_reglage_equipement_html(id_equipement: int, admin: Admin, cha
     return RedirectResponse(f"{cible}#reglages", status_code=303)
 
 
-@app.post("/equipements/{id_equipement}/services/{metrique_id}")
-async def modifier_reglage_service_html(id_equipement: int, metrique_id: int, admin: Admin,
-                                         intervalle_polling: str = Form(""), nb_echecs: str = Form(""),
-                                         actif: str = Form("")):
-    """Enregistre les réglages propres à un service ; décoché, il suit ceux de l'équipement."""
-    cible = f"/equipements/{id_equipement}"
-    if metrique_id not in {service["metrique_id"] for service in db.services_de_l_equipement(id_equipement)}:
-        message = "Ce service n'est pas surveillé par cet équipement"
-        return RedirectResponse(f"{cible}?erreur={quote(message)}#reglages", status_code=303)
-    intervalle, echecs = None, None
-    if actif:
-        if intervalle_polling.strip():
-            intervalle = _entier_borne(intervalle_polling, "intervalle_polling")
-            if intervalle is None:
-                return RedirectResponse(f"{cible}?erreur={quote(_message_bornes('intervalle_polling'))}#reglages", status_code=303)
-        if nb_echecs.strip():
-            echecs = _entier_borne(nb_echecs, "nb_echecs_alerte")
-            if echecs is None:
-                return RedirectResponse(f"{cible}?erreur={quote(_message_bornes('nb_echecs_alerte'))}#reglages", status_code=303)
-    if intervalle is None and echecs is None:
-        db.supprimer_reglage_service(id_equipement, metrique_id)
-    else:
-        db.enregistrer_reglage_service(id_equipement, metrique_id, intervalle, echecs)
-    collecte.oublier_echeances(id_equipement)
-    return RedirectResponse(f"{cible}#reglages", status_code=303)
-
-
 @app.post("/parametres")
 async def modifier_parametres_html(admin: Admin, intervalle_polling: str = Form(""),
                                     nb_echecs_alerte: str = Form(""), duree_conservation: str = Form("")):
@@ -442,22 +493,43 @@ async def modifier_parametres_html(admin: Admin, intervalle_polling: str = Form(
     return RedirectResponse("/alertes#parametres", status_code=303)
 
 
-@app.get("/historique", response_class=HTMLResponse)
-async def page_historique(request: Request, utilisateur: Connecte):
-    """Changements de statut et alertes, avec recherche et filtre par catégorie."""
-    recherche = request.query_params.get("recherche", "").strip()
-    categorie = request.query_params.get("categorie", "")
-    limite = 300
-    return templates.TemplateResponse(request, "historique.html", {
+TAILLE_PAGE_LOGS = 50
+
+
+@app.get("/logs", response_class=HTMLResponse)
+async def page_logs(request: Request, utilisateur: Connecte):
+    """Fil unifié des logs (changements de statut, erreurs de collecte, alertes), filtrable par
+    équipement, créneau de dates, catégorie et texte, et paginé."""
+    parametres = request.query_params
+    equipement_id = int(parametres["equipement_id"]) if parametres.get("equipement_id", "").isdigit() else None
+    depuis = parametres.get("depuis") or None
+    jusqu_a = parametres.get("jusqu_a") or None
+    categorie = parametres.get("categorie", "") if parametres.get("categorie", "") in db.CATEGORIES_LOGS else ""
+    recherche = parametres.get("recherche", "").strip()
+    filtres = {"equipement_id": equipement_id, "depuis": depuis,
+               "jusqu_a": f"{jusqu_a}T23:59:59" if jusqu_a else None,   # inclut toute la journée
+               "categorie": categorie or None, "recherche": recherche or None}
+    total = db.compter_logs(**filtres)
+    nb_pages = max(1, -(-total // TAILLE_PAGE_LOGS))   # division arrondie au-dessus
+    page = max(1, min(int(parametres["page"]) if parametres.get("page", "").isdigit() else 1, nb_pages))
+    filtre_qs = urlencode({cle: valeur for cle, valeur in {
+        "equipement_id": equipement_id, "depuis": depuis, "jusqu_a": jusqu_a, "categorie": categorie,
+        "recherche": recherche}.items() if valeur})
+    return templates.TemplateResponse(request, "logs.html", {
         "utilisateur": utilisateur,
-        "evenements": db.lister_historique(
-            categorie if categorie in ("STATUT", "AVERTISSEMENT", "CRITIQUE") else None, recherche, limite,
-        ),
-        "recherche": recherche,
-        "categorie": categorie,
-        "limite": limite,
-        "page_active": "historique",
+        "logs": db.lister_logs(**filtres, limite=TAILLE_PAGE_LOGS, decalage=(page - 1) * TAILLE_PAGE_LOGS),
+        "equipements": db.lister_equipements(),
+        "equipement_id_filtre": equipement_id, "depuis_filtre": depuis, "jusqu_a_filtre": jusqu_a,
+        "categorie": categorie, "recherche": recherche,
+        "page": page, "nb_pages": nb_pages, "total_logs": total, "filtre_qs": filtre_qs,
+        "page_active": "logs",
     })
+
+
+@app.get("/historique")
+async def ancien_historique(request: Request, utilisateur: Connecte):
+    """L'onglet Historique est devenu Logs."""
+    return RedirectResponse(f"/logs?{request.url.query}" if request.url.query else "/logs", status_code=303)
 
 
 @app.get("/inventaire", response_class=HTMLResponse)
@@ -470,8 +542,12 @@ async def inventaire(request: Request, admin: Admin):
     if recherche_modif and equipement_a_modifier is None and not erreur:
         erreur = f"Aucun équipement (ou plusieurs) ne correspond à « {recherche_modif} »"
 
+    modeles_detail = db.lister_modeles_detail()
     return templates.TemplateResponse(request, "inventaire.html", {
         "utilisateur": admin,
+        "modeles_detail": modeles_detail,
+        "modeles_objets": db.lister_modeles_objets(),
+        "acces_internet": internet.acces_internet(),
         "equipements": equipements,
         "groupes": db.lister_groupes(),
         "modeles": db.lister_modeles(),
@@ -509,10 +585,9 @@ async def ajouter_equipement_html(
         return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}", status_code=303)
 
     sys_object_id = infos.get("sysObjectID")
-    modele_non_identifie = False
-    if id_modele is None:
-        id_modele, identifie = await collecte.detecter_modele(adresse, communaute_snmp, version_snmp, sys_object_id)
-        modele_non_identifie = not identifie
+    automatique = id_modele is None
+    if automatique:
+        id_modele = await collecte.choisir_modele_integre(adresse, communaute_snmp, version_snmp)
 
     try:
         id_equipement = db.creer_equipement(
@@ -530,8 +605,9 @@ async def ajouter_equipement_html(
     await collecte.decouvrir_interfaces(
         db.obtenir_equipement(id_equipement), config.SNMP_TIMEOUT, config.SNMP_RETRIES,
     )
-    suite = "?modele_non_identifie=1" if modele_non_identifie else ""
-    return RedirectResponse(f"/equipements/{id_equipement}/interfaces{suite}", status_code=303)
+    # Constructeur, capteurs, CPU et RAM : en tâche de fond, le parcours des capteurs peut être long
+    collecte.lancer_identification([id_equipement], changer="TOUJOURS" if automatique else "JAMAIS")
+    return RedirectResponse(f"/equipements/{id_equipement}/interfaces?identification=1", status_code=303)
 
 
 @app.post("/equipements/supprimer")
@@ -606,6 +682,51 @@ async def creer_groupe_html(admin: Admin, nom: str = Form(...)):
     return RedirectResponse("/inventaire", status_code=303)
 
 
+@app.post("/equipements/{id_equipement}/objets/detecter")
+async def detecter_objets_html(id_equipement: int, admin: Admin):
+    """Relance la détection des objets surveillables sur cet équipement."""
+    equipement = db.obtenir_equipement(id_equipement)
+    if equipement is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+    await collecte.detecter_objets(equipement)
+    return RedirectResponse(f"/equipements/{id_equipement}#objets", status_code=303)
+
+
+@app.get("/equipements/{id_equipement}/services", response_class=HTMLResponse)
+async def choisir_services_html(request: Request, id_equipement: int, admin: Admin):
+    """Choix des services à garder : mesures du modèle et objets détectés, groupés comme sur la fiche."""
+    equipement = db.obtenir_equipement(id_equipement)
+    if equipement is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+    groupes: dict[str, list] = {}
+    for objet in db.lister_objets_detectes(id_equipement):
+        titre = objet["table_nom"] if objet["table_nom"] and objet["table_nom"] != objet["objet"] else "Valeurs simples"
+        groupes.setdefault(f"{titre} · {objet['mib']}", []).append(objet)
+    return templates.TemplateResponse(request, "services.html", {
+        "utilisateur": admin, "equipement": equipement, "groupes": groupes, "page_active": "inventaire",
+        "metriques": db.metriques_du_modele(id_equipement),
+    })
+
+
+@app.post("/equipements/{id_equipement}/services")
+async def enregistrer_services_html(request: Request, id_equipement: int, admin: Admin):
+    """Garde les services cochés. Une mesure décochée n'est plus relevée ; un objet décoché n'est plus
+    affiché ni relevé (son historique est effacé). Leurs seuils sont mis de côté, leurs alertes closes."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
+    formulaire = await request.form()
+    db.choisir_metriques_gardees(id_equipement, {int(v) for v in formulaire.getlist("garder_mesure") if str(v).isdigit()})
+    db.choisir_objets_gardes(id_equipement, {int(v) for v in formulaire.getlist("garder") if str(v).isdigit()})
+    collecte.oublier_echeances(id_equipement)
+    collecte.reevaluer_seuils(id_equipement)
+    return RedirectResponse(f"/equipements/{id_equipement}#mesures", status_code=303)
+
+
+@app.get("/equipements/{id_equipement}/objets")
+async def ancien_choix_objets_html(id_equipement: int, admin: Admin):
+    return RedirectResponse(f"/equipements/{id_equipement}/services#objets", status_code=303)
+
+
 @app.post("/groupes/{id_groupe}/supprimer")
 async def supprimer_groupe_html(id_groupe: int, admin: Admin):
     """Supprime un groupe depuis la page Inventaire ; ses équipements restent, sans groupe."""
@@ -651,6 +772,19 @@ async def mesures_equipement_api(id_equipement: int, metrique: str, utilisateur:
     return [dict(ligne) for ligne in mesures]
 
 
+@app.get("/api/equipements/{id_equipement}/volumes")
+async def volumes_equipement_api(id_equipement: int, utilisateur: Connecte,
+                                 depuis: str | None = None, jusqu_a: str | None = None):
+    """Historique de chaque volume disque : {nom: [{horodatage, valeur, utilise, total}]}."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
+    series: dict[str, list[dict]] = {}
+    for ligne in db.lister_volumes(id_equipement, depuis, jusqu_a):
+        series.setdefault(ligne["nom"], []).append(
+            {"horodatage": ligne["horodatage"], "valeur": ligne["valeur"], "utilise": ligne["utilise"], "total": ligne["total"]})
+    return series
+
+
 @app.get("/api/equipements/{id_equipement}/debit")
 async def debit_equipement_api(id_equipement: int, metrique: Literal["if_in_octets", "if_out_octets"],
                                 interface_id: int, utilisateur: Connecte,
@@ -663,56 +797,61 @@ async def debit_equipement_api(id_equipement: int, metrique: Literal["if_in_octe
     return metriques.calculer_debit(mesures, interface["vitesse"])
 
 
+@app.get("/api/equipements/{id_equipement}/objets/{objet_id}/mesures")
+async def mesures_objet_api(id_equipement: int, objet_id: int, utilisateur: Connecte):
+    """Historique d'un objet détecté, par instance, pour ses graphiques."""
+    series: dict[str, list[dict]] = {}
+    for ligne in db.lister_mesures_objet(id_equipement, objet_id):
+        series.setdefault(ligne["instance"], []).append({"horodatage": ligne["horodatage"], "valeur": ligne["valeur"]})
+    return series
+
+
 @app.get("/api/alertes")
 async def lister_alertes_api(utilisateur: Connecte, statut: Literal["ACTIVE", "CLOTUREE"] | None = None):
     """Liste des alertes, éventuellement filtrée par statut."""
     return [dict(ligne) for ligne in db.lister_alertes(statut=statut)]
 
 
-@app.get("/api/seuils")
-async def lister_seuils_api(utilisateur: Connecte):
-    """Liste des seuils configurés."""
-    return [dict(ligne) for ligne in db.lister_seuils()]
-
-
 @app.get("/api/equipements/{id_equipement}/seuils")
 async def seuils_equipement_api(id_equipement: int, utilisateur: Connecte):
-    """Seuils qui s'appliquent à un équipement ; `personnalise` indique un seuil propre."""
+    """Services gardés de l'équipement qui peuvent recevoir un seuil, avec leur unité et leur seuil
+    (`origine` : propre ou defaut ; null si aucun)."""
     if db.obtenir_equipement(id_equipement) is None:
         return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
-    return [dict(ligne) for ligne in db.seuils_de_l_equipement(id_equipement)]
+    return [{"cible": c["cle"], "libelle": c["libelle"], "groupe": c["groupe"], "unite": c["profil"]["unite"],
+             "nature": c["profil"]["nature"], "etats": c["profil"].get("etats"), "seuil": c["seuil"] and {
+                 k: c["seuil"][k] for k in ("operateur", "avertissement", "critique", "actif", "origine")}}
+            for c in collecte.cibles_de_seuil(id_equipement)]
 
 
 @app.post("/api/equipements/{id_equipement}/seuils")
 async def enregistrer_seuil_equipement_api(id_equipement: int, payload: SeuilEquipement, admin: Admin):
-    """Enregistre le seuil propre à cet équipement pour un service ; avec actif=false, il revient au global."""
-    if payload.actif:
-        erreur = _erreur_seuil_equipement(id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique)
-        if erreur:
-            return JSONResponse(status_code=400, content={"erreur": erreur})
-        db.enregistrer_seuil_equipement(id_equipement, payload.metrique_id, payload.valeur, payload.valeur_critique)
-    else:
-        db.supprimer_seuil_equipement(id_equipement, payload.metrique_id)
+    """Enregistre le seuil d'un service de cet équipement."""
+    erreur = _enregistrer_seuil(id_equipement, payload.cible, payload.operateur, payload.avertissement,
+                                payload.critique, payload.actif)
+    if erreur:
+        return JSONResponse(status_code=400, content={"erreur": erreur})
+    return {"statut": "ok"}
+
+
+@app.delete("/api/equipements/{id_equipement}/seuils")
+async def remettre_a_zero_seuils_api(id_equipement: int, admin: Admin):
+    """Retire tous les seuils réglés sur cet équipement."""
+    if db.obtenir_equipement(id_equipement) is None:
+        return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
+    db.supprimer_seuils_equipement(id_equipement)
     collecte.reevaluer_seuils(id_equipement)
     return {"statut": "ok"}
 
 
-@app.delete("/api/equipements/{id_equipement}/seuils/{metrique_id}")
-async def supprimer_seuil_equipement_api(id_equipement: int, metrique_id: int, admin: Admin):
-    """Fait revenir un service de cet équipement au réglage global."""
-    db.supprimer_seuil_equipement(id_equipement, metrique_id)
+@app.delete("/api/equipements/{id_equipement}/seuils/{cible}")
+async def supprimer_seuil_equipement_api(id_equipement: int, cible: str, admin: Admin):
+    """Retire le seuil réglé : CPU, RAM et disque reviennent à leur valeur par défaut."""
+    trouvee = next((c for c in collecte.cibles_de_seuil(id_equipement) if c["cle"] == cible), None)
+    if trouvee is None:
+        return JSONResponse(status_code=404, content={"erreur": "Service introuvable"})
+    db.supprimer_seuil(id_equipement, trouvee["metrique_id"], trouvee["objet_id"])
     collecte.reevaluer_seuils(id_equipement)
-    return {"statut": "ok"}
-
-
-@app.post("/api/seuils")
-async def modifier_seuil_api(payload: SeuilAModifier, admin: Admin):
-    """Modifie les seuils d'un service."""
-    if payload.valeur > payload.valeur_critique:
-        return JSONResponse(status_code=400, content={"erreur": "L'avertissement dépasse le niveau critique"})
-    if not db.modifier_seuil(payload.metrique_id, payload.valeur, payload.valeur_critique):
-        return JSONResponse(status_code=404, content={"erreur": "Seuil introuvable"})
-    collecte.reevaluer_seuils_du_parc()
     return {"statut": "ok"}
 
 
@@ -732,12 +871,10 @@ async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
         return JSONResponse(status_code=400, content={"erreur": str(exc)})
 
     sys_object_id = infos.get("sysObjectID")
-    id_modele, modele_non_identifie = payload.modele_supervision_id, False
-    if id_modele is None:
-        id_modele, identifie = await collecte.detecter_modele(
-            payload.adresse, payload.communaute_snmp, payload.version_snmp, sys_object_id,
-        )
-        modele_non_identifie = not identifie
+    id_modele = payload.modele_supervision_id
+    automatique = id_modele is None
+    if automatique:
+        id_modele = await collecte.choisir_modele_integre(payload.adresse, payload.communaute_snmp, payload.version_snmp)
 
     try:
         id_equipement = db.creer_equipement(
@@ -750,4 +887,5 @@ async def creer_equipement_api(payload: NouvelEquipement, admin: Admin):
         return JSONResponse(
             status_code=409, content={"erreur": f"Un équipement existe déjà pour « {payload.adresse} »"},
         )
-    return {"id": id_equipement, "modele_non_identifie": modele_non_identifie}
+    collecte.lancer_identification([id_equipement], changer="TOUJOURS" if automatique else "JAMAIS")
+    return {"id": id_equipement, "modele_supervision_id": id_modele, "identification_en_cours": True}

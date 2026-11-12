@@ -1,6 +1,6 @@
 {# Attend `alertes` ; avec `masquer_correlees`, seule la cause racine d'une panne en cascade est listée. #}
 {% set liste = alertes|rejectattr('cause_racine_id')|list if masquer_correlees else alertes %}
-{% for categorie, titre in [('EQUIPEMENT', 'Équipements injoignables (ping)'), ('SERVICE', 'Services en erreur (relevé SNMP)')] %}
+{% for categorie, titre in [('EQUIPEMENT', 'Équipements injoignables (ping)'), ('SERVICE', 'Services et interfaces en alerte (relevé SNMP)')] %}
   {% set alertes_categorie = liste|selectattr('categorie', 'equalto', categorie)|list %}
   <h3 class="sous-titre">{{ titre }}</h3>
   {% if alertes_categorie %}

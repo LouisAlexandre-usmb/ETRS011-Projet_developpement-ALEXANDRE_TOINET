@@ -25,6 +25,7 @@
       <dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd>
       <dt>Description</dt><dd>{{ equipement.description or '—' }}</dd>
       <dt>Système</dt><dd>{{ equipement.description_systeme or '—' }}</dd>
+      <dt>Système reconnu</dt><dd>{{ equipement.systeme or 'non identifié (modèle générique ou hôte standard)' }}</dd>
       <dt>Modèle de supervision</dt><dd>{{ equipement.modele_nom }}</dd>
       <dt>Version SNMP</dt><dd>{{ 'v1' if equipement.version_snmp == 'V1' else 'v2c' }}</dd>
       <dt>sysObjectID</dt><dd><code>{{ equipement.sys_object_id or '—' }}</code></dd>
@@ -69,52 +70,98 @@
   </details>
 
   <details class="carte" id="seuils">
-    <summary><h2>Seuils de cet équipement</h2></summary>
-    <p class="meta">Coché, le seuil propre remplace le <a href="/alertes">réglage global</a> pour ce service, sur cet équipement uniquement. Décoché, c'est le réglage global qui s'applique.</p>
-    <table class="tableau">
-      <thead>
-        <tr><th>Service</th><th>Avertissement (%)</th><th>Critique (%)</th><th>Seuil propre actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
-      </thead>
-      <tbody>
-        {% for s in seuils %}
-          <tr>
-            <td>{{ s.libelle }}</td>
-            {% if utilisateur.est_admin %}
-              <td><input type="number" name="valeur" min="0" max="100" step="0.1" value="{{ s.valeur }}" required
-                         aria-label="Avertissement {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"
-                         oninput="document.getElementById('propre-{{ s.metrique_id }}').checked = true"></td>
-              <td><input type="number" name="valeur_critique" min="0" max="100" step="0.1" value="{{ s.valeur_critique }}" required
-                         aria-label="Critique {{ s.libelle }}" form="seuil-{{ s.metrique_id }}"
-                         oninput="document.getElementById('propre-{{ s.metrique_id }}').checked = true"></td>
-              <td><input type="checkbox" name="actif" value="1" id="propre-{{ s.metrique_id }}"
-                         aria-label="Seuil propre actif pour {{ s.libelle }}"
-                         form="seuil-{{ s.metrique_id }}" {{ 'checked' if s.personnalise }}></td>
-            {% else %}
-              <td>{{ s.valeur }}</td><td>{{ s.valeur_critique }}</td><td>{{ 'Oui' if s.personnalise else 'Non' }}</td>
-            {% endif %}
-            <td>
-              {% if s.personnalise %}<span class="pastille degrade">Propre</span>
-              {% else %}<span class="pastille attente">Global</span>{% endif %}
-            </td>
-            {% if utilisateur.est_admin %}
-              <td>
-                <form method="post" action="/equipements/{{ equipement.id }}/seuils" id="seuil-{{ s.metrique_id }}">
-                  <input type="hidden" name="metrique_id" value="{{ s.metrique_id }}">
-                  <button type="submit">Enregistrer</button>
-                </form>
-                {% if s.personnalise %}
-                  <form method="post" action="/equipements/{{ equipement.id }}/seuils/{{ s.metrique_id }}/reinitialiser">
-                    <button type="submit" class="bouton-secondaire">Revenir au global</button>
-                  </form>
-                {% endif %}
-              </td>
-            {% endif %}
-          </tr>
-        {% else %}
-          <tr><td colspan="6" class="meta">Aucun service avec seuil pour le modèle de cet équipement.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <summary>
+      <h2>Seuils de cet équipement</h2>
+      <span class="meta">{{ cibles_seuil|selectattr('seuil')|selectattr('seuil.actif')|list|length }} actif(s)</span>
+    </summary>
+    <p class="meta">Un seuil par service gardé : l'alerte est un avertissement quand la valeur atteint la première limite, critique à la seconde. Chaque limite est facultative, dans l'unité du service (trafic : débit de chaque interface suivie ; uptime : en minutes, pour repérer un redémarrage récent ; un état : choisi parmi ses valeurs). Les services retirés n'apparaissent plus ici ; recochés, ils reprennent leur seuil.
+      {% if utilisateur.est_admin %}<a href="/equipements/{{ equipement.id }}/services">Choisir les services à garder</a>{% endif %}</p>
+    {% if utilisateur.est_admin and cibles_seuil|selectattr('seuil')|selectattr('seuil.origine', 'equalto', 'propre')|list %}
+      <form method="post" action="/equipements/{{ equipement.id }}/seuils/remise-a-zero" class="actions-formulaire"
+            onsubmit="return confirm('Retirer tous les seuils réglés sur cet équipement ? CPU, mémoire et disque reviennent à leurs valeurs par défaut, les autres services n\'ont plus de seuil.')">
+        <button type="submit" class="bouton-danger">Remettre à zéro les seuils</button>
+        <span class="meta">{{ cibles_seuil|selectattr('seuil')|selectattr('seuil.origine', 'equalto', 'propre')|list|length }} seuil(s) réglé(s)</span>
+      </form>
+    {% endif %}
+    {% if cibles_seuil %}
+      <div class="tableau-defilant">
+        <table class="tableau tableau-seuils">
+          <thead>
+            <tr><th>Service</th><th>Valeur actuelle</th><th>Condition</th><th>Avertissement</th><th>Critique</th><th>Actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th class="colonne-actions">Actions</th>{% endif %}</tr>
+          </thead>
+          {% for groupe in cibles_seuil|map(attribute='groupe')|unique %}{% set cibles = cibles_seuil|selectattr('groupe', 'equalto', groupe)|list %}
+            <tbody>
+              <tr class="ligne-groupe"><th colspan="{{ 8 if utilisateur.est_admin else 7 }}">{{ groupe }}</th></tr>
+              {% for c in cibles %}
+                {% set p = c.profil %}
+                {% set s = c.seuil or {} %}
+                <tr>
+                  <td>{{ c.libelle }}{% if p.unite %} <span class="meta">({{ p.unite }})</span>{% endif %}</td>
+                  <td class="meta">{{ valeurs_actuelles[c.cle] }}</td>
+                  {% if utilisateur.est_admin %}
+                    <td>
+                      <select name="operateur" form="seuil-{{ c.cle }}" aria-label="Condition pour {{ c.libelle }}" data-cocher="{{ c.cle }}">
+                        {% for symbole, libelle in operateurs.items() if p.nature != 'ETAT' or symbole == '=' %}
+                          <option value="{{ symbole }}" {{ 'selected' if (s.operateur or p.operateur) == symbole }}>{{ libelle }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    {% for champ, libelle in (('avertissement', 'Avertissement'), ('critique', 'Critique')) %}
+                      <td>
+                        {% if p.nature == 'ETAT' %}
+                          <select name="{{ champ }}" form="seuil-{{ c.cle }}" aria-label="{{ libelle }} pour {{ c.libelle }}" data-cocher="{{ c.cle }}">
+                            <option value="">—</option>
+                            {% for valeur, etat in p.etats.items() %}
+                              <option value="{{ valeur }}" {{ 'selected' if s.get(champ) is not none and s.get(champ)|int == valeur }}>{{ etat }}</option>
+                            {% endfor %}
+                          </select>
+                        {% else %}
+                          <input type="number" name="{{ champ }}" form="seuil-{{ c.cle }}" step="{{ p.pas }}"
+                                 {% if p.min is not none %}min="{{ p.min }}"{% endif %} {% if p.max is not none %}max="{{ p.max }}"{% endif %}
+                                 value="{{ s.get(champ) if s.get(champ) is not none else '' }}" aria-label="{{ libelle }} pour {{ c.libelle }}" data-cocher="{{ c.cle }}">
+                        {% endif %}
+                      </td>
+                    {% endfor %}
+                    <td><input type="checkbox" name="actif" value="1" id="actif-{{ c.cle }}" form="seuil-{{ c.cle }}"
+                               aria-label="Seuil actif pour {{ c.libelle }}" {{ 'checked' if s.actif }}></td>
+                  {% else %}
+                    <td>{{ operateurs[s.operateur] if s.operateur else '—' }}</td>
+                    <td>{{ s.get('avertissement') if s.get('avertissement') is not none else '—' }}</td>
+                    <td>{{ s.get('critique') if s.get('critique') is not none else '—' }}</td>
+                    <td>{{ 'Oui' if s.actif else 'Non' }}</td>
+                  {% endif %}
+                  <td>
+                    {% if s.origine == 'propre' %}<span class="pastille degrade">Réglé</span>
+                    {% elif s.origine == 'defaut' %}<span class="pastille attente">Par défaut</span>
+                    {% else %}<span class="meta">Aucun</span>{% endif %}
+                  </td>
+                  {% if utilisateur.est_admin %}
+                    <td class="colonne-actions"><div class="actions-seuil">
+                      <form method="post" action="/equipements/{{ equipement.id }}/seuils" id="seuil-{{ c.cle }}">
+                        <input type="hidden" name="cible" value="{{ c.cle }}">
+                        <button type="submit">Enregistrer</button>
+                      </form>
+                      <form method="post" action="/equipements/{{ equipement.id }}/seuils/reinitialiser">
+                        <input type="hidden" name="cible" value="{{ c.cle }}">
+                        {% if s.origine == 'propre' %}
+                          <button type="submit" class="bouton-secondaire"
+                                  title="{{ 'Revenir au seuil par défaut' if c.a_defaut else 'Retirer ce seuil' }}">Réinitialiser</button>
+                        {% else %}
+                          <button type="button" class="bouton-secondaire" disabled
+                                  title="{{ 'Déjà au seuil par défaut' if c.a_defaut else 'Aucun seuil réglé' }}">Réinitialiser</button>
+                        {% endif %}
+                      </form>
+                    </div></td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          {% endfor %}
+        </table>
+      </div>
+    {% else %}
+      <p class="meta">Aucun service gardé ne peut recevoir de seuil sur cet équipement.</p>
+    {% endif %}
   </details>
 
   <details class="carte" id="reglages">
@@ -154,48 +201,6 @@
         {% endfor %}
       </tbody>
     </table>
-
-    <h3 class="sous-titre">Réglages par service</h3>
-    <p class="meta">Champ vide ou case décochée : le service suit les réglages de l'équipement. La disponibilité de l'équipement reste testée selon son propre intervalle.</p>
-    <table class="tableau">
-      <thead>
-        <tr><th>Service</th><th>Intervalle (s)</th><th>Échecs avant alerte</th><th>Réglage propre actif</th><th>Origine</th>{% if utilisateur.est_admin %}<th></th>{% endif %}</tr>
-      </thead>
-      <tbody>
-        {% for s in services %}
-          <tr>
-            <td>{{ s.libelle }}</td>
-            {% if utilisateur.est_admin %}
-              <td><input type="number" name="intervalle_polling" min="{{ reglages.intervalle_polling[2] }}" max="{{ reglages.intervalle_polling[3] }}" step="1"
-                         value="{{ s.intervalle_polling or '' }}" placeholder="{{ equipement.intervalle_polling or parametres.intervalle_polling_defaut }}"
-                         aria-label="Intervalle {{ s.libelle }}" form="service-{{ s.metrique_id }}"
-                         oninput="document.getElementById('service-actif-{{ s.metrique_id }}').checked = true"></td>
-              <td><input type="number" name="nb_echecs" min="{{ reglages.nb_echecs_alerte[2] }}" max="{{ reglages.nb_echecs_alerte[3] }}" step="1"
-                         value="{{ s.nb_echecs or '' }}" placeholder="{{ equipement.nb_echecs_alerte or parametres.nb_echecs_avant_indisponibilite }}"
-                         aria-label="Échecs avant alerte {{ s.libelle }}" form="service-{{ s.metrique_id }}"
-                         oninput="document.getElementById('service-actif-{{ s.metrique_id }}').checked = true"></td>
-              <td><input type="checkbox" name="actif" value="1" id="service-actif-{{ s.metrique_id }}" aria-label="Réglage propre actif : {{ s.libelle }}"
-                         form="service-{{ s.metrique_id }}" {{ 'checked' if s.personnalise }}></td>
-            {% else %}
-              <td>{{ s.intervalle_polling or equipement.intervalle_polling or parametres.intervalle_polling_defaut }}</td>
-              <td>{{ s.nb_echecs or equipement.nb_echecs_alerte or parametres.nb_echecs_avant_indisponibilite }}</td>
-              <td>{{ 'Oui' if s.personnalise else 'Non' }}</td>
-            {% endif %}
-            <td>
-              {% if s.personnalise %}<span class="pastille degrade">Propre</span>
-              {% else %}<span class="pastille attente">Équipement</span>{% endif %}
-            </td>
-            {% if utilisateur.est_admin %}
-              <td>
-                <form method="post" action="/equipements/{{ equipement.id }}/services/{{ s.metrique_id }}" id="service-{{ s.metrique_id }}">
-                  <button type="submit">Enregistrer</button>
-                </form>
-              </td>
-            {% endif %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
   </details>
 
   <details class="carte" id="collecte">
@@ -211,6 +216,13 @@
       </label>
       <button type="submit">Changer de modèle</button>
     </form>
+    <form method="post" action="/equipements/{{ equipement.id }}/modele/identifier" class="actions-formulaire">
+      <button type="submit" class="bouton-secondaire">Relancer l'identification du modèle</button>
+      <span class="meta">Reconnaît le constructeur (sysObjectID, sysDescr), puis choisit le modèle qui répond le mieux.</span>
+    </form>
+    {% if identification %}
+      <p class="bandeau-info">Identification lancée : actualisez la page dans une minute pour voir le modèle retenu.</p>
+    {% endif %}
     {% endif %}
   </details>
 
@@ -218,8 +230,43 @@
     <summary><h2>Mesures</h2></summary>
     <div class="graphiques">
       {% if 'cpu' in codes_actifs %}<div><canvas id="graphique-cpu"></canvas></div>{% endif %}
-      {% if 'ram' in codes_actifs %}<div><canvas id="graphique-ram"></canvas></div>{% endif %}
-      {% if 'uptime' in codes_actifs %}<div><canvas id="graphique-uptime"></canvas></div>{% endif %}
+      {% for code in ('ram', 'disque') if code in codes_actifs %}
+        <div>
+          <canvas id="graphique-{{ code }}"></canvas>
+          <p class="meta detail-graphique" id="detail-graphique-{{ code }}">Cliquez sur un point pour voir l'espace utilisé et l'espace total.</p>
+          {% if code == 'disque' %}
+            <div id="volumes-disque" data-rafraichir>
+              {% if volumes %}
+                <table class="tableau tableau-volumes">
+                  <thead><tr><th>Volume</th><th>Utilisé</th><th>Espace</th></tr></thead>
+                  <tbody>
+                    {% for v in volumes %}
+                      <tr>
+                        <td>{{ v.nom }}{% if loop.first and volumes|length > 1 %} <span class="meta">(suivi par les seuils)</span>{% endif %}</td>
+                        <td>{{ '%.1f %%'|format(v.valeur) }}</td>
+                        <td>{{ v.utilise|taille }} sur {{ v.total|taille }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                <p class="meta">Dernier relevé : {{ volumes[0].horodatage|date_fr }}. Les seuils et les alertes portent sur le volume le plus rempli.</p>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+      {% if 'uptime' in codes_actifs %}
+        <div class="tuile-uptime" id="tuile-uptime" data-rafraichir>
+          <h3 class="sous-titre">Uptime</h3>
+          {% if dernieres.uptime and dernieres.uptime.valeur is not none %}
+            <p class="compteur-uptime" id="compteur-uptime" data-centiemes="{{ dernieres.uptime.valeur|int }}" data-releve="{{ dernieres.uptime.horodatage }}">—</p>
+            <p class="meta">depuis le dernier redémarrage · relevé le {{ dernieres.uptime.horodatage|date_fr }}</p>
+            <button type="button" class="bouton-secondaire" id="detail-uptime">Afficher les secondes</button>
+          {% else %}
+            <p class="meta">Pas encore de relevé.</p>
+          {% endif %}
+        </div>
+      {% endif %}
       <div>
         <label class="meta">Interface :
           <select id="selecteur-interface">
@@ -232,7 +279,69 @@
       </div>
     </div>
     <p class="meta">Débit calculé par différence entre deux relevés des compteurs. Une interruption de collecte ou une remise à zéro apparaît comme un trou dans la courbe.</p>
+    {% if utilisateur.est_admin %}
+      <p class="actions-formulaire"><a href="/equipements/{{ equipement.id }}/services#mesures" class="bouton-secondaire lien-bouton">Choisir les mesures à garder</a></p>
+    {% endif %}
   </details>
+
+  <details class="carte" id="objets" open data-rafraichir>
+    <summary>
+      <h2>Objets détectés</h2>
+      <span class="meta">{{ objets.simples|length + objets.listes|length }} groupe(s)</span>
+    </summary>
+    {% if objets.simples or objets.listes %}
+      {% for liste in objets.listes %}
+        <h3 class="sous-titre">{{ liste.nom }} <span class="meta">{{ liste.mib }}{% if liste.total > liste.lignes|length %} · {{ liste.lignes|length }} lignes sur {{ liste.total }}{% endif %}</span></h3>
+        <div class="tableau-defilant">
+          <table class="tableau">
+            <thead><tr>{% for colonne in liste.colonnes %}<th title="{{ liste.descriptions[loop.index0] or '' }}">{{ colonne }}</th>{% endfor %}</tr></thead>
+            <tbody>
+              {% for ligne in liste.lignes %}
+                <tr>{% for valeur in ligne %}<td>{{ valeur }}</td>{% endfor %}</tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endfor %}
+      {% if objets.simples %}
+        <h3 class="sous-titre">Valeurs simples</h3>
+        <table class="tableau">
+          <thead><tr><th>Objet</th><th>Valeur</th><th>MIB</th></tr></thead>
+          <tbody>
+            {% for objet in objets.simples %}
+              <tr><td title="{{ objet.description or '' }}">{{ objet.nom }}</td><td>{{ objet.valeur }}</td><td class="meta">{{ objet.mib }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    {% elif nb_modeles_objets %}
+      <p class="meta">Aucun objet détecté pour l'instant sur cet équipement.</p>
+    {% else %}
+      <p class="meta">Aucun objet détecté sur cet équipement : relancez l'identification si son constructeur a changé.</p>
+    {% endif %}
+    {% if objets.nb_ecartes %}<p class="meta">{{ objets.nb_ecartes }} objet(s) écarté(s), non affiché(s) ni relevé(s).</p>{% endif %}
+    {% if utilisateur.est_admin %}
+      <form method="post" action="/equipements/{{ equipement.id }}/objets/detecter" class="actions-formulaire">
+        <button type="submit" class="bouton-secondaire">Détecter les objets</button>
+        {% if objets.nb_total %}<a href="/equipements/{{ equipement.id }}/services#objets" class="bouton-secondaire lien-bouton">Choisir les objets à garder</a>{% endif %}
+      </form>
+    {% endif %}
+  </details>
+
+  {% if objets.graphiques %}
+    <details class="carte" id="objets-graphiques">
+      <summary><h2>Graphiques des objets détectés</h2><span class="meta">{{ objets.graphiques|length }}</span></summary>
+      <div class="graphiques">
+        {% for g in objets.graphiques %}
+          <div><canvas id="graphique-objet-{{ g.id }}" data-objet="{{ g.id }}" data-nom="{{ g.nom }}"></canvas></div>
+        {% endfor %}
+      </div>
+      <p class="meta">Relevés toutes les 5 minutes.</p>
+      {% if utilisateur.est_admin %}
+        <p class="actions-formulaire"><a href="/equipements/{{ equipement.id }}/services#objets" class="bouton-secondaire lien-bouton">Choisir les objets à garder</a></p>
+      {% endif %}
+    </details>
+  {% endif %}
 
   <details class="carte" id="interfaces">
     <summary><h2>Interfaces surveillées</h2>
@@ -299,6 +408,7 @@
 {% block scripts %}
 <script src="{{ url_for('static', path='rafraichir.js') }}?v={{ version_statique() }}" data-periode="{{ periode_rafraichissement() }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', path='graphiques.js') }}?v={{ version_statique() }}"></script>
 <script>
   const idEquipement = {{ equipement.id }};
   const graphiques = {};
@@ -316,14 +426,73 @@
     return reponse.ok ? reponse.json() : [];
   }
 
+  function formaterTaille(octets) {
+    if (octets === null || octets === undefined) return "—";
+    let taille = octets;
+    for (const unite of ["B", "KB", "MB", "GB", "TB"]) {
+      if (Math.abs(taille) < 1024 || unite === "TB") return unite === "B" ? `${Math.round(taille)} B` : `${taille.toFixed(2)} ${unite}`;
+      taille /= 1024;
+    }
+  }
+
+  // Espace utilisé / total d'un relevé de RAM ou de disque (absent pour les autres indicateurs)
+  function detailTaille(mesure) {
+    if (!mesure || !mesure.total) return null;
+    return `${formaterTaille(mesure.utilise)} utilisés sur ${formaterTaille(mesure.total)}` + (mesure.detail ? ` (${mesure.detail})` : "");
+  }
+
   function dessinerGraphique(canvasId, mesures, libelle, diviseur = 1) {
     const etiquettes = mesures.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
     const valeurs = mesures.map((m) => (m.valeur === null ? null : m.valeur / diviseur));
+    const zoneDetail = document.getElementById(canvasId.replace("graphique-", "detail-graphique-"));
     if (graphiques[canvasId]) graphiques[canvasId].destroy();
     graphiques[canvasId] = new Chart(document.getElementById(canvasId), {
       type: "line",
-      data: { labels: etiquettes, datasets: [{ label: libelle, data: valeurs, borderColor: "#17707F", spanGaps: false }] },
-      options: { animation: false, scales: { y: { beginAtZero: true } } },
+      data: { labels: etiquettes, datasets: [{ label: libelle, data: valeurs, ...CHARTE.serie(0, true), spanGaps: false }] },
+      options: {
+        animation: false, scales: { y: { beginAtZero: true } }, interaction: CHARTE.interaction,
+        plugins: { tooltip: { callbacks: { afterLabel: (contexte) => detailTaille(mesures[contexte.dataIndex]) || "" } } },
+        // Un clic sur un point affiche son détail sous le graphique
+        onClick: (evenement, points) => {
+          if (!zoneDetail || !points.length) return;
+          const mesure = mesures[points[0].index];
+          const quand = new Date(mesure.horodatage + "Z").toLocaleString();
+          zoneDetail.textContent = mesure.valeur === null ? `${quand} : pas de relevé`
+            : `${quand} : ${mesure.valeur.toFixed(1)} % · ${detailTaille(mesure) || "taille non fournie par l'équipement"}`;
+        },
+      },
+    });
+  }
+
+  function dessinerVolumes(canvasId, series) {
+    // Axe commun : tous les instants de relevé ; chaque volume a sa valeur à chacun d'eux
+    const instants = [...new Set(Object.values(series).flat().map((m) => m.horodatage))].sort();
+    const parVolume = Object.fromEntries(Object.entries(series).map(([nom, mesures]) =>
+      [nom, Object.fromEntries(mesures.map((m) => [m.horodatage, m]))]));
+    const noms = Object.keys(series);
+    const zoneDetail = document.getElementById("detail-graphique-disque");
+    if (graphiques[canvasId]) graphiques[canvasId].destroy();
+    graphiques[canvasId] = new Chart(document.getElementById(canvasId), {
+      type: "line",
+      data: {
+        labels: instants.map((h) => new Date(h + "Z").toLocaleTimeString()),
+        datasets: noms.map((nom, rang) => ({
+          label: `${nom} (%)`, data: instants.map((h) => parVolume[nom][h]?.valeur ?? null),
+          ...CHARTE.serie(rang, noms.length === 1), spanGaps: false,
+        })),
+      },
+      options: {
+        animation: false, scales: { y: { beginAtZero: true, suggestedMax: 100 } }, interaction: CHARTE.interaction,
+        plugins: { tooltip: { callbacks: { afterLabel: (contexte) =>
+          detailTaille(parVolume[noms[contexte.datasetIndex]][instants[contexte.dataIndex]]) || "" } } },
+        onClick: (evenement, points) => {
+          if (!zoneDetail || !points.length) return;
+          const nom = noms[points[0].datasetIndex], instant = instants[points[0].index];
+          const mesure = parVolume[nom][instant];
+          zoneDetail.textContent = `${new Date(instant + "Z").toLocaleString()} · ${nom} : ` +
+            (mesure ? `${mesure.valeur.toFixed(1)} % · ${detailTaille(mesure) || "taille inconnue"}` : "pas de relevé");
+        },
+      },
     });
   }
 
@@ -335,8 +504,12 @@
     if (document.getElementById("graphique-ram")) {
       dessinerGraphique("graphique-ram", await chargerSerie("ram"), "RAM (%)");
     }
-    if (document.getElementById("graphique-uptime")) {
-      dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+    if (document.getElementById("graphique-disque")) {
+      // Une courbe par volume quand ils sont connus ; sinon, l'historique du seul volume le plus rempli
+      const reponse = await fetch(`/api/equipements/${idEquipement}/volumes`);
+      const volumes = reponse.ok ? await reponse.json() : {};
+      if (Object.keys(volumes).length) dessinerVolumes("graphique-disque", volumes);
+      else dessinerGraphique("graphique-disque", await chargerSerie("disque"), "Capacité disque (%)");
     }
   }
 
@@ -355,8 +528,8 @@
       data: {
         labels: etiquettes,
         datasets: [
-          { label: "Entrant (Mb/s)", data: entrant.map(enMbps), borderColor: "#17707F", spanGaps: false },
-          { label: "Sortant (Mb/s)", data: sortant.map(enMbps), borderColor: "#B45514", spanGaps: false },
+          { label: "Entrant (Mb/s)", data: entrant.map(enMbps), ...CHARTE.serie(0, true), spanGaps: false },
+          { label: "Sortant (Mb/s)", data: sortant.map(enMbps), ...CHARTE.serie(1), borderDash: [5, 4], spanGaps: false },
         ],
       },
       options: { animation: false, scales: { y: { beginAtZero: true } } },
@@ -366,6 +539,64 @@
   // Un graphique dessiné dans un bloc replié n'a pas de taille : il faut le redimensionner à l'ouverture
   document.getElementById("mesures").addEventListener("toggle", () => {
     Object.values(graphiques).forEach((graphique) => graphique.resize());
+  });
+
+  // Les graphiques des objets détectés se chargent quand on déplie leur bloc
+  async function dessinerObjets() {
+    for (const canvas of document.querySelectorAll("canvas[data-objet]")) {
+      if (graphiques[canvas.id]) continue;
+      const reponse = await fetch(`/api/equipements/${idEquipement}/objets/${canvas.dataset.objet}/mesures`);
+      const series = reponse.ok ? await reponse.json() : {};
+      const premiere = Object.values(series)[0] || [];
+      graphiques[canvas.id] = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels: premiere.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString()),
+          datasets: Object.entries(series).map(([instance, mesures], rang) => ({
+            label: `${canvas.dataset.nom} ${instance}`, data: mesures.map((m) => m.valeur),
+            ...CHARTE.serie(rang, Object.keys(series).length === 1), spanGaps: false,
+          })),
+        },
+        options: { animation: false, plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } } },
+      });
+    }
+  }
+  const blocObjets = document.getElementById("objets-graphiques");
+  if (blocObjets) {
+    blocObjets.addEventListener("toggle", () => { if (blocObjets.open) dessinerObjets(); });
+    if (blocObjets.open) dessinerObjets();
+  }
+
+  // Uptime : compteur qui avance chaque seconde depuis le dernier relevé (le bloc est remplacé à
+  // chaque actualisation de la page, d'où la recherche de l'élément à chaque tic)
+  let uptimeEnSecondes = false;
+  try { uptimeEnSecondes = localStorage.getItem("uptime-secondes") === "1"; } catch { /* stockage indisponible */ }
+  function afficherUptime() {
+    const compteur = document.getElementById("compteur-uptime");
+    if (!compteur) return;
+    const ecoule = (Date.now() - new Date(compteur.dataset.releve + "Z").getTime()) / 1000;
+    let reste = Math.max(0, Math.floor(Number(compteur.dataset.centiemes) / 100 + ecoule));
+    const jours = Math.floor(reste / 86400); reste %= 86400;
+    const heures = Math.floor(reste / 3600); reste %= 3600;
+    const minutes = Math.floor(reste / 60); const secondes = reste % 60;
+    const deux = (n) => String(n).padStart(2, "0");
+    compteur.textContent = `${jours} j ${deux(heures)} h ${deux(minutes)} min` + (uptimeEnSecondes ? ` ${deux(secondes)} s` : "");
+    const bouton = document.getElementById("detail-uptime");
+    if (bouton) bouton.textContent = uptimeEnSecondes ? "Masquer les secondes" : "Afficher les secondes";
+  }
+  document.addEventListener("click", (evenement) => {
+    if (evenement.target.id !== "detail-uptime") return;
+    uptimeEnSecondes = !uptimeEnSecondes;
+    try { localStorage.setItem("uptime-secondes", uptimeEnSecondes ? "1" : "0"); } catch { /* stockage indisponible */ }
+    afficherUptime();
+  });
+  afficherUptime();
+  setInterval(afficherUptime, 1000);
+
+  // Modifier la condition ou une limite d'un seuil le rend actif
+  document.addEventListener("input", (evenement) => {
+    const cle = evenement.target.dataset && evenement.target.dataset.cocher;
+    if (cle) { const actif = document.getElementById(`actif-${cle}`); if (actif) actif.checked = true; }
   });
 
   rafraichirCpuRamUptime();

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block titre %}Services de {{ equipement.nom }} · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <a href="/equipements/{{ equipement.id }}#mesures" class="lien-retour">&larr; Fiche de {{ equipement.nom }}</a>
+
+  <section class="carte">
+    <div class="carte-titre"><h2>Services à garder</h2></div>
+    <p class="meta">Décochez ce qui ne vous intéresse pas. Une mesure décochée n'est plus relevée (son historique est gardé) ; un objet décoché n'est plus affiché ni relevé (son historique est effacé). Leur seuil est mis de côté et leur alerte close : recochés, ils reprennent avec le même seuil.</p>
+    <form method="post" action="/equipements/{{ equipement.id }}/services" id="choix-services">
+      <p class="actions-formulaire">
+        <button type="button" class="bouton-secondaire" data-cocher="1">Tout cocher</button>
+        <button type="button" class="bouton-secondaire" data-cocher="0">Tout décocher</button>
+      </p>
+
+      <h3 class="sous-titre" id="mesures">Mesures</h3>
+      {% if metriques %}
+        <fieldset class="groupe-objets">
+          <legend><label><input type="checkbox" class="cocher-groupe"> Mesures du modèle</label></legend>
+          {% for m in metriques %}
+            <label class="case-objet">
+              <input type="checkbox" name="garder_mesure" value="{{ m.metrique_id }}" {{ 'checked' if m.garde }}>
+              {{ m.libelle }}{% if m.par_interface %} <span class="meta">par interface</span>{% endif %}
+            </label>
+          {% endfor %}
+        </fieldset>
+      {% else %}
+        <p class="meta">Le modèle de cet équipement ne relève aucune mesure.</p>
+      {% endif %}
+
+      <h3 class="sous-titre" id="objets">Objets détectés</h3>
+      {% for titre, objets in groupes.items() %}
+        <fieldset class="groupe-objets">
+          <legend><label><input type="checkbox" class="cocher-groupe"> {{ titre }}</label></legend>
+          {% for o in objets %}
+            <label class="case-objet" title="{{ o.description or '' }}">
+              <input type="checkbox" name="garder" value="{{ o.id }}" {{ 'checked' if o.garde }}>
+              {{ o.objet }} <span class="meta">{{ o.nature|lower }}</span>
+            </label>
+          {% endfor %}
+        </fieldset>
+      {% else %}
+        <p class="meta">Aucun objet détecté pour l'instant.</p>
+      {% endfor %}
+      <p class="actions-formulaire"><button type="submit">Enregistrer</button></p>
+    </form>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const formulaire = document.getElementById("choix-services");
+  const cases = () => formulaire.querySelectorAll('input[name="garder"], input[name="garder_mesure"]');
+  const majGroupes = () => formulaire.querySelectorAll(".groupe-objets").forEach((groupe) => {
+    const sienne = [...groupe.querySelectorAll('input[name="garder"], input[name="garder_mesure"]')];
+    const tete = groupe.querySelector(".cocher-groupe");
+    tete.checked = sienne.every((c) => c.checked);
+    tete.indeterminate = !tete.checked && sienne.some((c) => c.checked);
+  });
+  formulaire.addEventListener("click", (evenement) => {
+    const bouton = evenement.target.closest("[data-cocher]");
+    if (bouton) { cases().forEach((c) => { c.checked = bouton.dataset.cocher === "1"; }); majGroupes(); }
+  });
+  formulaire.addEventListener("change", (evenement) => {
+    if (evenement.target.classList.contains("cocher-groupe")) {
+      evenement.target.closest(".groupe-objets").querySelectorAll('input[name="garder"], input[name="garder_mesure"]')
+        .forEach((c) => { c.checked = evenement.target.checked; });
+    }
+    majGroupes();
+  });
+  majGroupes();
+</script>
+{% endblock %}

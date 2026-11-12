@@ -1,0 +1,1442 @@
+{
+ "modeles": [
+  {
+   "nom": "Capteurs matériels",
+   "integre": true,
+   "description": "ENTITY-SENSOR-MIB (RFC 3433) : températures, ventilateurs, tensions et alimentations.",
+   "mibs": [
+    {
+     "nom": "ENTITY-SENSOR-MIB",
+     "base": "1.3.6.1.2.1.99",
+     "objets": [
+      {
+       "nom": "entPhySensorType",
+       "oid": "1.3.6.1.2.1.99.1.1.1.1",
+       "type": "column",
+       "syntaxe": "EntitySensorDataType",
+       "description": "The type of data returned by the associated entPhySensorValue object. This object SHOULD be set by the agent during entry creation, and the value SHOULD NOT change during operation.",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorScale",
+       "oid": "1.3.6.1.2.1.99.1.1.1.2",
+       "type": "column",
+       "syntaxe": "EntitySensorDataScale",
+       "description": "The exponent to apply to values returned by the associated entPhySensorValue object. This object SHOULD be set by the agent during entry creation, and the value SHOULD NOT change during operation.",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorPrecision",
+       "oid": "1.3.6.1.2.1.99.1.1.1.3",
+       "type": "column",
+       "syntaxe": "EntitySensorPrecision",
+       "description": "The number of decimal places of precision in fixed-point sensor values returned by the associated entPhySensorValue object. This object SHOULD be set to '0' when the associated entPhySensorType value is not a fixed-point type: e.g., 'percentRH(9)', 'rpm(10)', 'cmm(11)', or 'truthvalue(12)'. This obj",
+       "etats": {
+        "9": "percentRH",
+        "10": "rpm",
+        "11": "cmm",
+        "12": "truthvalue"
+       },
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorValue",
+       "oid": "1.3.6.1.2.1.99.1.1.1.4",
+       "type": "column",
+       "syntaxe": "EntitySensorValue",
+       "description": "The most recent measurement obtained by the agent for this sensor. To correctly interpret the value of this object, the associated entPhySensorType, entPhySensorScale, and entPhySensorPrecision objects must also be examined.",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorOperStatus",
+       "oid": "1.3.6.1.2.1.99.1.1.1.5",
+       "type": "column",
+       "syntaxe": "EntitySensorStatus",
+       "description": "The operational status of the sensor.",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorUnitsDisplay",
+       "oid": "1.3.6.1.2.1.99.1.1.1.6",
+       "type": "column",
+       "syntaxe": "SnmpAdminString",
+       "description": "A textual description of the data units that should be used in the display of entPhySensorValue.",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorValueTimeStamp",
+       "oid": "1.3.6.1.2.1.99.1.1.1.7",
+       "type": "column",
+       "syntaxe": "TimeStamp",
+       "description": "The value of sysUpTime at the time the status and/or value of this sensor was last obtained by the agent.",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      },
+      {
+       "nom": "entPhySensorValueUpdateRate",
+       "oid": "1.3.6.1.2.1.99.1.1.1.8",
+       "type": "column",
+       "syntaxe": "Unsigned32",
+       "description": "An indication of the frequency that the agent updates the associated entPhySensorValue object, representing in milliseconds. The value zero indicates: - the sensor value is updated on demand (e.g., when polled by the agent for a get-request), - the sensor value is updated when the sensor value chang",
+       "etats": {},
+       "table": "entPhySensorEntry"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "nom": "Onduleur",
+   "integre": true,
+   "description": "UPS-MIB (RFC 1628) : batterie, autonomie, entrée et sortie.",
+   "mibs": [
+    {
+     "nom": "UPS-MIB",
+     "base": "1.3.6.1.2.1.33.1",
+     "objets": [
+      {
+       "nom": "upsIdentManufacturer",
+       "oid": "1.3.6.1.2.1.33.1.1.1",
+       "type": "scalar",
+       "syntaxe": "OctetString",
+       "description": "The name of the UPS manufacturer.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsIdentModel",
+       "oid": "1.3.6.1.2.1.33.1.1.2",
+       "type": "scalar",
+       "syntaxe": "OctetString",
+       "description": "The UPS Model designation.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsIdentUPSSoftwareVersion",
+       "oid": "1.3.6.1.2.1.33.1.1.3",
+       "type": "scalar",
+       "syntaxe": "OctetString",
+       "description": "The UPS firmware/software version(s). This variable may or may not have the same value as upsIdentAgentSoftwareVersion in some implementations.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsIdentAgentSoftwareVersion",
+       "oid": "1.3.6.1.2.1.33.1.1.4",
+       "type": "scalar",
+       "syntaxe": "OctetString",
+       "description": "The UPS agent software version. This variable may or may not have the same value as upsIdentUPSSoftwareVersion in some implementations.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsIdentName",
+       "oid": "1.3.6.1.2.1.33.1.1.5",
+       "type": "scalar",
+       "syntaxe": "OctetString",
+       "description": "A string identifying the UPS. This object should be set by the administrator.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsIdentAttachedDevices",
+       "oid": "1.3.6.1.2.1.33.1.1.6",
+       "type": "scalar",
+       "syntaxe": "OctetString",
+       "description": "A string identifying the devices attached to the output(s) of the UPS. This object should be set by the administrator.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsBatteryStatus",
+       "oid": "1.3.6.1.2.1.33.1.2.1",
+       "type": "scalar",
+       "syntaxe": "Enumeration",
+       "description": "The indication of the capacity remaining in the UPS system's batteries. A value of batteryNormal indicates that the remaining run-time is greater than upsConfigLowBattTime. A value of batteryLow indicates that the remaining battery run-time is less than or equal to upsConfigLowBattTime. A value of b",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsSecondsOnBattery",
+       "oid": "1.3.6.1.2.1.33.1.2.2",
+       "type": "scalar",
+       "syntaxe": "NonNegativeInteger",
+       "description": "If the unit is on battery power, the elapsed time since the UPS last switched to battery power, or the time since the network management subsystem was last restarted, whichever is less. Zero shall be returned if the unit is not on battery power.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsEstimatedMinutesRemaining",
+       "oid": "1.3.6.1.2.1.33.1.2.3",
+       "type": "scalar",
+       "syntaxe": "PositiveInteger",
+       "description": "An estimate of the time to battery charge depletion under the present load conditions if the utility power is off and remains off, or if it were to be lost and remain off.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsEstimatedChargeRemaining",
+       "oid": "1.3.6.1.2.1.33.1.2.4",
+       "type": "scalar",
+       "syntaxe": "Integer32",
+       "description": "An estimate of the battery charge remaining expressed as a percent of full charge.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsBatteryVoltage",
+       "oid": "1.3.6.1.2.1.33.1.2.5",
+       "type": "scalar",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The magnitude of the present battery voltage.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsBatteryCurrent",
+       "oid": "1.3.6.1.2.1.33.1.2.6",
+       "type": "scalar",
+       "syntaxe": "Integer32",
+       "description": "The present battery current.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsBatteryTemperature",
+       "oid": "1.3.6.1.2.1.33.1.2.7",
+       "type": "scalar",
+       "syntaxe": "Integer32",
+       "description": "The ambient temperature at or near the UPS Battery casing.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsInputLineBads",
+       "oid": "1.3.6.1.2.1.33.1.3.1",
+       "type": "scalar",
+       "syntaxe": "Counter32",
+       "description": "A count of the number of times the input entered an out-of-tolerance condition as defined by the manufacturer. This count is incremented by one each time the input transitions from zero out-of-tolerance lines to one or more input lines out-of-tolerance.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsInputNumLines",
+       "oid": "1.3.6.1.2.1.33.1.3.2",
+       "type": "scalar",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The number of input lines utilized in this device. This variable indicates the number of rows in the input table.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsInputLineIndex",
+       "oid": "1.3.6.1.2.1.33.1.3.3.1.1",
+       "type": "column",
+       "syntaxe": "PositiveInteger",
+       "description": "The input line identifier.",
+       "etats": {},
+       "table": "upsInputEntry"
+      },
+      {
+       "nom": "upsInputFrequency",
+       "oid": "1.3.6.1.2.1.33.1.3.3.1.2",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The present input frequency.",
+       "etats": {},
+       "table": "upsInputEntry"
+      },
+      {
+       "nom": "upsInputVoltage",
+       "oid": "1.3.6.1.2.1.33.1.3.3.1.3",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The magnitude of the present input voltage.",
+       "etats": {},
+       "table": "upsInputEntry"
+      },
+      {
+       "nom": "upsInputCurrent",
+       "oid": "1.3.6.1.2.1.33.1.3.3.1.4",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The magnitude of the present input current.",
+       "etats": {},
+       "table": "upsInputEntry"
+      },
+      {
+       "nom": "upsInputTruePower",
+       "oid": "1.3.6.1.2.1.33.1.3.3.1.5",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The magnitude of the present input true power.",
+       "etats": {},
+       "table": "upsInputEntry"
+      },
+      {
+       "nom": "upsOutputSource",
+       "oid": "1.3.6.1.2.1.33.1.4.1",
+       "type": "scalar",
+       "syntaxe": "Enumeration",
+       "description": "The present source of output power. The enumeration none(2) indicates that there is no source of output power (and therefore no output power), for example, the system has opened the output breaker.",
+       "etats": {
+        "2": "none"
+       },
+       "table": null
+      },
+      {
+       "nom": "upsOutputFrequency",
+       "oid": "1.3.6.1.2.1.33.1.4.2",
+       "type": "scalar",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The present output frequency.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsOutputNumLines",
+       "oid": "1.3.6.1.2.1.33.1.4.3",
+       "type": "scalar",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The number of output lines utilized in this device. This variable indicates the number of rows in the output table.",
+       "etats": {},
+       "table": null
+      },
+      {
+       "nom": "upsOutputLineIndex",
+       "oid": "1.3.6.1.2.1.33.1.4.4.1.1",
+       "type": "column",
+       "syntaxe": "PositiveInteger",
+       "description": "The output line identifier.",
+       "etats": {},
+       "table": "upsOutputEntry"
+      },
+      {
+       "nom": "upsOutputVoltage",
+       "oid": "1.3.6.1.2.1.33.1.4.4.1.2",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The present output voltage.",
+       "etats": {},
+       "table": "upsOutputEntry"
+      },
+      {
+       "nom": "upsOutputCurrent",
+       "oid": "1.3.6.1.2.1.33.1.4.4.1.3",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The present output current.",
+       "etats": {},
+       "table": "upsOutputEntry"
+      },
+      {
+       "nom": "upsOutputPower",
+       "oid": "1.3.6.1.2.1.33.1.4.4.1.4",
+       "type": "column",
+       "syntaxe": "NonNegativeInteger",
+       "description": "The present output true power.",
+       "etats": {},
+       "table": "upsOutputEntry"
+      },
+      {
+       "nom": "upsOutputPercentLoad",
+       "oid": "1.3.6.1.2.1.33.1.4.4.1.5",
+       "type": "column",
+       "syntaxe": "Integer32",
+       "description": "The percentage of the UPS power capacity presently being used on this output line, i.e., the greater of the percent load of true power capacity and the percent load of VA.",
+       "etats": {},
+       "table": "upsOutputEntry"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "nom": "Imprimante",
+   "integre": true,
+   "description": "Printer-MIB (RFC 3805) : niveau des consommables.",
+   "mibs": [
+    {
+     "nom": "Printer-MIB",
+     "base": "1.3.6.1.2.1.43.11.1.1",
+     "objets": [
+      {
+       "nom": "prtMarkerSuppliesIndex",
+       "oid": "1.3.6.1.2.1.43.11.1.1.1",
+       "type": "column",
+       "syntaxe": "Integer32",
+       "description": "A unique value used by the printer to identify this marker supply. Although these values may change due to a major reconfiguration of the device (e.g., the addition of new marker supplies to the printer), values SHOULD remain stable across successive printer power cycles. NOTE: The above description",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesMarkerIndex",
+       "oid": "1.3.6.1.2.1.43.11.1.1.2",
+       "type": "column",
+       "syntaxe": "Integer32",
+       "description": "The value of prtMarkerIndex corresponding to the marking sub unit with which this marker supply sub-unit is associated.",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesColorantIndex",
+       "oid": "1.3.6.1.2.1.43.11.1.1.3",
+       "type": "column",
+       "syntaxe": "Integer32",
+       "description": "The value of prtMarkerColorantIndex corresponding to the colorant with which this marker supply sub-unit is associated. This value shall be 0 if there is no colorant table or if this supply does not depend on a single specified colorant. NOTE: The above description has been modified from RFC 1759 fo",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesClass",
+       "oid": "1.3.6.1.2.1.43.11.1.1.4",
+       "type": "column",
+       "syntaxe": "PrtMarkerSuppliesClassTC",
+       "description": "Indicates whether this supply entity represents a supply that is consumed or a receptacle that is filled. NOTE: The above description has been modified from RFC 1759 for clarification.",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesType",
+       "oid": "1.3.6.1.2.1.43.11.1.1.5",
+       "type": "column",
+       "syntaxe": "PrtMarkerSuppliesTypeTC",
+       "description": "The type of this supply.",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesDescription",
+       "oid": "1.3.6.1.2.1.43.11.1.1.6",
+       "type": "column",
+       "syntaxe": "PrtLocalizedDescriptionStringTC",
+       "description": "The description of this supply container/receptacle in the localization specified by prtGeneralCurrentLocalization.",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesSupplyUnit",
+       "oid": "1.3.6.1.2.1.43.11.1.1.7",
+       "type": "column",
+       "syntaxe": "PrtMarkerSuppliesSupplyUnitTC",
+       "description": "Unit of measure of this marker supply container/receptacle. NOTE: The above description has been modified from RFC 1759 for clarification.",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesMaxCapacity",
+       "oid": "1.3.6.1.2.1.43.11.1.1.8",
+       "type": "column",
+       "syntaxe": "Integer32",
+       "description": "The maximum capacity of this supply container/receptacle expressed in prtMarkerSuppliesSupplyUnit. If this supply container/receptacle can reliably sense this value, the value is reported by the printer and is read-only; otherwise, the value may be written (by a Remote Control Panel or a Management ",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      },
+      {
+       "nom": "prtMarkerSuppliesLevel",
+       "oid": "1.3.6.1.2.1.43.11.1.1.9",
+       "type": "column",
+       "syntaxe": "Integer32",
+       "description": "The current level if this supply is a container; the remaining space if this supply is a receptacle. If this supply container/receptacle can reliably sense this value, the value is reported by the printer and is read-only; otherwise, the value may be written (by a Remote Control Panel or a Managemen",
+       "etats": {},
+       "table": "prtMarkerSuppliesEntry"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "constructeurs": [
+  {
+   "cle": "cisco",
+   "id_modele": 2,
+   "nom": "Switch Cisco",
+   "systeme": "Cisco IOS",
+   "description": "CPU : CISCO-PROCESS-MIB (cpmCPUTotal5minRev) ; mémoire : CISCO-MEMORY-POOL-MIB (pool utilisé / libre).",
+   "regles": [
+    {
+     "sysDescr": [
+      "Cisco Internetwork Operating System Software",
+      "IOS (tm)",
+      "Cisco IOS Software",
+      "Global Site Selector"
+     ],
+     "sysDescr_except": [
+      "LINUX_IOSD",
+      "IOS-XE",
+      "IOSXE",
+      "CAT3K_CAA"
+     ]
+    },
+    {
+     "sysObjectID": [
+      ".1.3.6.1.4.1.9.1.2330",
+      ".1.3.6.1.4.1.9.1.2331",
+      ".1.3.6.1.4.1.9.1.2332",
+      ".1.3.6.1.4.1.9.1.2333"
+     ]
+    },
+    {
+     "sysDescr": [
+      "IOS-XE",
+      "IOSXE",
+      "LINUX_IOSD",
+      "CAT3K_CAA"
+     ]
+    },
+    {
+     "sysObjectID": [
+      ".1.3.6.1.4.1.9.1.2683",
+      ".1.3.6.1.4.1.9.1.2684",
+      ".1.3.6.1.4.1.9.1.2685",
+      ".1.3.6.1.4.1.9.1.2686",
+      ".1.3.6.1.4.1.9.1.2687"
+     ]
+    }
+   ],
+   "elements": [
+    [
+     "cpu",
+     "1.3.6.1.4.1.9.9.109.1.1.1.1.8",
+     "MAX_TABLE",
+     null,
+     null
+    ],
+    [
+     "ram",
+     "1.3.6.1.4.1.9.9.48.1.1.1.5",
+     "RATIO_UTILISE_LIBRE_TABLE",
+     "1.3.6.1.4.1.9.9.48.1.1.1.6",
+     null
+    ]
+   ],
+   "objets": {
+    "nom": "Capteurs Cisco IOS",
+    "texte": "Capteurs Cisco IOS",
+    "mibs": [
+     {
+      "nom": "Puissance",
+      "base": null,
+      "objets": [
+       {
+        "nom": "pethMainPsePower",
+        "oid": "1.3.6.1.2.1.105.1.3.1.1.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Puissance : PoE Budget Total - ID",
+        "etats": {},
+        "gravites": {},
+        "table": "pethMainPseTable",
+        "diviseur": null
+       },
+       {
+        "nom": "pethMainPseConsumptionPower",
+        "oid": "1.3.6.1.2.1.105.1.3.1.1.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Puissance : PoE Budget Consumed - ID",
+        "etats": {},
+        "gravites": {},
+        "table": "pethMainPseTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "Compteur",
+      "base": null,
+      "objets": [
+       {
+        "nom": "cpeExtPdStatsTotalDevices",
+        "oid": "1.3.6.1.4.1.9.9.402.1.4.1",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Compteur : PoE Devices Connected",
+        "etats": {},
+        "gravites": {},
+        "table": "cpeExtPdStatistics",
+        "diviseur": null
+       },
+       {
+        "nom": "clogMsgIgnores",
+        "oid": "1.3.6.1.4.1.9.9.41.1.1.4",
+        "type": "column",
+        "syntaxe": "Counter32",
+        "description": "Compteur : Syslog Messages Ignored",
+        "etats": {},
+        "gravites": {},
+        "table": "clogMsgIgnores",
+        "diviseur": null
+       },
+       {
+        "nom": "clogMsgDrops",
+        "oid": "1.3.6.1.4.1.9.9.41.1.1.5",
+        "type": "column",
+        "syntaxe": "Counter32",
+        "description": "Compteur : Syslog Messages Dropped",
+        "etats": {},
+        "gravites": {},
+        "table": "clogMsgDrops",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "État",
+      "base": null,
+      "objets": [
+       {
+        "nom": "cHsrpGrpStandbyState",
+        "oid": "1.3.6.1.4.1.9.9.106.1.2.1.1.15",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : HSRP Status",
+        "etats": {
+         "1": "initial",
+         "2": "learn",
+         "3": "listen",
+         "4": "speak",
+         "5": "standby",
+         "6": "active"
+        },
+        "gravites": {
+         "1": 2,
+         "2": 2,
+         "3": 1,
+         "4": 1,
+         "5": 0,
+         "6": 0
+        },
+        "table": "cHsrpGrpTable",
+        "diviseur": null
+       },
+       {
+        "nom": "cefcModuleOperStatus",
+        "oid": "1.3.6.1.4.1.9.9.117.1.2.1.1.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Operating Status",
+        "etats": {
+         "1": "unknown",
+         "2": "ok",
+         "3": "disabled",
+         "4": "okButDiagFailed",
+         "5": "boot",
+         "6": "selfTest",
+         "7": "failed",
+         "8": "missing",
+         "9": "mismatchWithParent",
+         "10": "mismatchConfig",
+         "11": "diagFailed",
+         "12": "dormant",
+         "13": "outOfServiceAdmin",
+         "14": "outOfServiceEnvTemp",
+         "15": "poweredDown",
+         "16": "poweredUp",
+         "17": "powerDenied",
+         "18": "powerCycled",
+         "19": "okButPowerOverWarning",
+         "20": "okButPowerOverCritical",
+         "21": "syncInProgress",
+         "22": "upgrading",
+         "23": "okButAuthFailed",
+         "24": "mdr",
+         "25": "fwMismatchFound",
+         "26": "fwDownloadSuccess",
+         "27": "fwDownloadFailure"
+        },
+        "gravites": {
+         "1": 3,
+         "2": 0,
+         "3": 0,
+         "4": 1,
+         "5": 1,
+         "6": 1,
+         "7": 2,
+         "8": 2,
+         "9": 2,
+         "10": 2,
+         "11": 2,
+         "12": 2,
+         "13": 2,
+         "14": 2,
+         "15": 2,
+         "16": 2,
+         "17": 2,
+         "18": 2,
+         "19": 1,
+         "20": 2,
+         "21": 1,
+         "22": 1,
+         "23": 2,
+         "24": 1,
+         "25": 2,
+         "26": 1,
+         "27": 2
+        },
+        "table": "cefcModuleOperStatus",
+        "diviseur": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "cle": "aruba",
+   "id_modele": 6,
+   "nom": "Switch Aruba (HP ProCurve)",
+   "systeme": "Aruba / HP ProCurve",
+   "description": "CPU : STATISTICS-MIB (hpSwitchCpuStat) ; mémoire : NETSWITCH-MIB (hpLocalMem alloué / total).",
+   "regles": [
+    {
+     "sysObjectID": [
+      ".1.3.6.1.4.1.11.2.3.7.8.5.",
+      ".1.3.6.1.4.1.11.2.3.7.11."
+     ]
+    }
+   ],
+   "elements": [
+    [
+     "cpu",
+     "1.3.6.1.4.1.11.2.14.11.5.1.9.6.1",
+     "MAX_TABLE",
+     null,
+     null
+    ],
+    [
+     "ram",
+     "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.7",
+     "RATIO_UTILISE_TOTAL_TABLE",
+     "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.5",
+     null
+    ]
+   ],
+   "objets": {
+    "nom": "Capteurs Aruba / HP ProCurve",
+    "texte": "Capteurs Aruba / HP ProCurve",
+    "mibs": [
+     {
+      "nom": "Température",
+      "base": null,
+      "objets": [
+       {
+        "nom": "hpicfPsTemp",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : Power Supply",
+        "etats": {},
+        "gravites": {},
+        "table": "hpicfPsTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "Puissance",
+      "base": null,
+      "objets": [
+       {
+        "nom": "hpicfPsWattageCur",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.6",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Puissance : Power Supply",
+        "etats": {},
+        "gravites": {},
+        "table": "hpicfPsTable",
+        "diviseur": null
+       },
+       {
+        "nom": "hpicfPseAvailablePower",
+        "oid": "1.3.6.1.4.1.11.2.14.11.1.9.1.6.1.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Puissance : PoE Power Total",
+        "etats": {},
+        "gravites": {},
+        "table": "hpicfPseFeaturesTable",
+        "diviseur": null
+       },
+       {
+        "nom": "hpicfPseUsedPower",
+        "oid": "1.3.6.1.4.1.11.2.14.11.1.9.1.6.1.5",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Puissance : PoE Power Used",
+        "etats": {},
+        "gravites": {},
+        "table": "hpicfPseFeaturesTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "État",
+      "base": null,
+      "objets": [
+       {
+        "nom": "hpicfFanState",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.54.2.1.1.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Fan",
+        "etats": {
+         "1": "removed",
+         "2": "False",
+         "3": "underspeed",
+         "4": "overspeed",
+         "5": "ok",
+         "6": "maxstate"
+        },
+        "gravites": {
+         "1": 3,
+         "2": 3,
+         "3": 1,
+         "4": 1,
+         "5": 0,
+         "6": 3
+        },
+        "table": "hpicfFanTable",
+        "diviseur": null
+       },
+       {
+        "nom": "hpicfPsState",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Power Supply",
+        "etats": {
+         "1": "psNotPresent",
+         "2": "psNotPlugged",
+         "3": "psPowered",
+         "4": "psFailed",
+         "5": "psPermFailure",
+         "6": "psMax"
+        },
+        "gravites": {
+         "1": 3,
+         "2": 2,
+         "3": 0,
+         "4": 2,
+         "5": 2,
+         "6": 3
+        },
+        "table": "hpicfPsTable",
+        "diviseur": null
+       },
+       {
+        "nom": "hpStackOperStatus",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.69.1.1.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Stack State",
+        "etats": {
+         "1": "disabled",
+         "2": "active",
+         "3": "fragmentInactive",
+         "0": "unAvailable",
+         "4": "fragmentActive"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 0,
+         "3": 2,
+         "0": 0,
+         "4": 2
+        },
+        "table": "hpStackConfig",
+        "diviseur": null
+       },
+       {
+        "nom": "hpStackTopology",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.69.1.1.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Stack Topology",
+        "etats": {
+         "0": "unKnown",
+         "1": "chain",
+         "2": "ring",
+         "3": "mesh",
+         "4": "partialMesh"
+        },
+        "gravites": {
+         "0": 0,
+         "1": 0,
+         "2": 0,
+         "3": 0,
+         "4": 1
+        },
+        "table": "hpStackConfig",
+        "diviseur": null
+       },
+       {
+        "nom": "hpStackMemberState",
+        "oid": "1.3.6.1.4.1.11.2.14.11.5.1.69.1.3.1.9",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Stack Member State",
+        "etats": {
+         "0": "unusedID",
+         "1": "missing",
+         "2": "provision",
+         "3": "commander",
+         "4": "standby",
+         "5": "member",
+         "6": "shutdown",
+         "7": "booting",
+         "8": "communicationFailure",
+         "9": "incompatibleOs",
+         "10": "unknownState",
+         "11": "standbyBooting"
+        },
+        "gravites": {
+         "0": 0,
+         "1": 3,
+         "2": 0,
+         "3": 0,
+         "4": 0,
+         "5": 0,
+         "6": 3,
+         "7": 3,
+         "8": 3,
+         "9": 3,
+         "10": 3,
+         "11": 3
+        },
+        "table": "hpStackMemberTable",
+        "diviseur": null
+       },
+       {
+        "nom": "entStateOper",
+        "oid": "1.3.6.1.2.1.131.1.1.1.3",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : []",
+        "etats": {
+         "1": "notPresent",
+         "2": "unknown",
+         "3": "ok",
+         "4": "failed"
+        },
+        "gravites": {
+         "1": 3,
+         "2": 1,
+         "3": 0,
+         "4": 2
+        },
+        "table": "entStateOper",
+        "diviseur": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "cle": "qnap",
+   "id_modele": 5,
+   "nom": "NAS QNAP",
+   "systeme": "QNAP",
+   "description": "CPU, mémoire (sans le cache) et volumes par HOST-RESOURCES-MIB ; capteurs par NAS-MIB.",
+   "regles": [
+    {
+     "sysObjectID": ".1.3.6.1.4.1.24681"
+    },
+    {
+     "sysDescr": "Linux TS-",
+     "snmpget": {
+      "oid": "1.3.6.1.2.1.47.1.1.1.1.12.1",
+      "op": "starts",
+      "value": "QNAP Systems"
+     }
+    }
+   ],
+   "elements": [
+    [
+     "cpu",
+     "1.3.6.1.2.1.25.3.3.1.2",
+     null,
+     null,
+     null
+    ],
+    [
+     "ram",
+     "1.3.6.1.2.1.25.2.3.1.6",
+     null,
+     null,
+     null
+    ],
+    [
+     "disque",
+     "1.3.6.1.2.1.25.2.3.1.6",
+     null,
+     null,
+     null
+    ]
+   ],
+   "objets": {
+    "nom": "Capteurs QNAP",
+    "texte": "Capteurs QNAP",
+    "mibs": [
+     {
+      "nom": "Température",
+      "base": null,
+      "objets": [
+       {
+        "nom": "enclosureSystemTemp",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.1.2.1.7",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : Enclosure",
+        "etats": {},
+        "gravites": {},
+        "table": "enclosureTable",
+        "diviseur": null
+       },
+       {
+        "nom": "cpuTemp",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.4.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : CPU",
+        "etats": {},
+        "gravites": {},
+        "table": "cpuTemp",
+        "diviseur": null
+       },
+       {
+        "nom": "systemPowerTemp",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.3.2.1.6",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : Enclosure PSU",
+        "etats": {},
+        "gravites": {},
+        "table": "systemPowerTable",
+        "diviseur": null
+       },
+       {
+        "nom": "diskTemperture",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.5.2.1.6",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : Disk",
+        "etats": {},
+        "gravites": {},
+        "table": "diskTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "Ventilateur",
+      "base": null,
+      "objets": [
+       {
+        "nom": "systemFanSpeed",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.2.2.1.5",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Ventilateur : FAN",
+        "etats": {},
+        "gravites": {},
+        "table": "systemFan2Table",
+        "diviseur": null
+       },
+       {
+        "nom": "systemPowerFanSpeed",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.3.2.1.5",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Ventilateur : PSU",
+        "etats": {},
+        "gravites": {},
+        "table": "systemPowerTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "État",
+      "base": null,
+      "objets": [
+       {
+        "nom": "hdStatus",
+        "oid": "1.3.6.1.4.1.24681.1.2.11.1.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Disk",
+        "etats": {
+         "0": "Ready",
+         "-5": "No Disk",
+         "-6": "Invalid",
+         "-9": "RW Error",
+         "-4": "Unknown"
+        },
+        "gravites": {
+         "0": 0,
+         "-5": 3,
+         "-6": 2,
+         "-9": 2,
+         "-4": 3
+        },
+        "table": "systemHdTable",
+        "diviseur": null
+       },
+       {
+        "nom": "systemPowerStatus",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.1.5.2.1.5",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : PSU",
+        "etats": {
+         "0": "Ok",
+         "-1": "Fail"
+        },
+        "gravites": {
+         "0": 0,
+         "-1": 2
+        },
+        "table": "systemPowerTable",
+        "diviseur": null
+       },
+       {
+        "nom": "raidStatus",
+        "oid": "1.3.6.1.4.1.24681.1.4.1.1.1.2.1.2.1.5",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Raid",
+        "etats": {
+         "0": "Ready",
+         "3": "Synchronizing",
+         "2": "Rebulding",
+         "1": "Degraded",
+         "5": "Offline",
+         "4": "Failure",
+         "6": "Migrating..."
+        },
+        "gravites": {
+         "0": 0,
+         "3": 2,
+         "2": 2,
+         "1": 1,
+         "5": 3,
+         "4": 1,
+         "6": 2
+        },
+        "table": "raidGroupTable",
+        "diviseur": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "cle": "synology",
+   "id_modele": 4,
+   "nom": "NAS Synology",
+   "systeme": "Synology DSM",
+   "description": "CPU, mémoire (sans le cache) et volumes par HOST-RESOURCES-MIB ; capteurs par SYNOLOGY-*-MIB.",
+   "regles": [
+    {
+     "sysDescr_regex": "/^Linux /",
+     "snmpget": {
+      "oid": "1.3.6.1.4.1.6574.1.1.0",
+      "op": "!=",
+      "value": false
+     }
+    },
+    {
+     "sysDescr_regex": "/^Linux /",
+     "snmpget": {
+      "oid": "1.3.6.1.2.1.25.1.4.0",
+      "value": [
+       "syno_hw_version",
+       "syno_dyn_module"
+      ]
+     }
+    }
+   ],
+   "elements": [
+    [
+     "cpu",
+     "1.3.6.1.2.1.25.3.3.1.2",
+     null,
+     null,
+     null
+    ],
+    [
+     "ram",
+     "1.3.6.1.2.1.25.2.3.1.6",
+     null,
+     null,
+     null
+    ],
+    [
+     "disque",
+     "1.3.6.1.2.1.25.2.3.1.6",
+     null,
+     null,
+     null
+    ]
+   ],
+   "objets": {
+    "nom": "Capteurs Synology DSM",
+    "texte": "Capteurs Synology DSM",
+    "mibs": [
+     {
+      "nom": "Température",
+      "base": null,
+      "objets": [
+       {
+        "nom": "temperature",
+        "oid": "1.3.6.1.4.1.6574.1.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : System",
+        "etats": {},
+        "gravites": {},
+        "table": "temperature",
+        "diviseur": null
+       },
+       {
+        "nom": "diskTemperature",
+        "oid": "1.3.6.1.4.1.6574.2.1.1.6",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Température : Disks",
+        "etats": {},
+        "gravites": {},
+        "table": "diskTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "Compteur",
+      "base": null,
+      "objets": [
+       {
+        "nom": "diskBadSector",
+        "oid": "1.3.6.1.4.1.6574.2.1.1.9",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "Compteur : Bad sectors",
+        "etats": {},
+        "gravites": {},
+        "table": "diskTable",
+        "diviseur": null
+       }
+      ]
+     },
+     {
+      "nom": "État",
+      "base": null,
+      "objets": [
+       {
+        "nom": "systemStatus",
+        "oid": "1.3.6.1.4.1.6574.1.1",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : System",
+        "etats": {
+         "1": "Normal",
+         "2": "Failed"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 2
+        },
+        "table": "systemStatus",
+        "diviseur": null
+       },
+       {
+        "nom": "powerStatus",
+        "oid": "1.3.6.1.4.1.6574.1.3",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Power",
+        "etats": {
+         "1": "Normal",
+         "2": "Failed"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 2
+        },
+        "table": "powerStatus",
+        "diviseur": null
+       },
+       {
+        "nom": "systemFanStatus",
+        "oid": "1.3.6.1.4.1.6574.1.4.1",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : FAN - System",
+        "etats": {
+         "1": "Normal",
+         "2": "Failed"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 2
+        },
+        "table": "systemFanStatus",
+        "diviseur": null
+       },
+       {
+        "nom": "cpuFanStatus",
+        "oid": "1.3.6.1.4.1.6574.1.4.2",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : FAN - CPU",
+        "etats": {
+         "1": "Normal",
+         "2": "Failed"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 2
+        },
+        "table": "cpuFanStatus",
+        "diviseur": null
+       },
+       {
+        "nom": "upgradeAvailable",
+        "oid": "1.3.6.1.4.1.6574.1.5.4",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Upgrade Availability",
+        "etats": {
+         "1": "Available",
+         "2": "Unavailable",
+         "3": "Connecting",
+         "4": "Disconnected",
+         "5": "Others"
+        },
+        "gravites": {
+         "1": 1,
+         "2": 0,
+         "3": 3,
+         "4": 3,
+         "5": 3
+        },
+        "table": "upgradeAvailable",
+        "diviseur": null
+       },
+       {
+        "nom": "raidStatus",
+        "oid": "1.3.6.1.4.1.6574.3.1.1.3",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : RAIDs",
+        "etats": {
+         "1": "Normal",
+         "2": "Repairing",
+         "3": "Migrating",
+         "4": "Expanding",
+         "5": "Deleting",
+         "6": "Creating",
+         "7": "RaidSyncing",
+         "8": "RaidParityChecking",
+         "9": "RaidAssembling",
+         "10": "Canceling",
+         "11": "Degrade",
+         "12": "Crashed",
+         "13": "DataScrubbing",
+         "14": "RaidDeploying",
+         "15": "RaidUnDeploying",
+         "16": "RaidMountCache",
+         "17": "RaidUnmountCache",
+         "18": "RaidExpandingUnfinishedSHR",
+         "19": "RaidConvertSHRToPool",
+         "20": "RaidMigrateSHR1ToSHR2",
+         "21": "RaidUnknownStatus"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 1,
+         "3": 1,
+         "4": 1,
+         "5": 1,
+         "6": 1,
+         "7": 1,
+         "8": 1,
+         "9": 1,
+         "10": 1,
+         "11": 2,
+         "12": 2,
+         "13": 1,
+         "14": 1,
+         "15": 1,
+         "16": 1,
+         "17": 1,
+         "18": 1,
+         "19": 1,
+         "20": 1,
+         "21": 3
+        },
+        "table": "raidTable",
+        "diviseur": null
+       },
+       {
+        "nom": "diskStatus",
+        "oid": "1.3.6.1.4.1.6574.2.1.1.5",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Disks",
+        "etats": {
+         "1": "Normal",
+         "2": "Initialized",
+         "3": "NotInitialized",
+         "4": "SystemPartitionFailed",
+         "5": "Crashed"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 1,
+         "3": 1,
+         "4": 2,
+         "5": 2
+        },
+        "table": "diskTable",
+        "diviseur": null
+       },
+       {
+        "nom": "diskHealthStatus",
+        "oid": "1.3.6.1.4.1.6574.2.1.1.13",
+        "type": "column",
+        "syntaxe": "Integer32",
+        "description": "État : Disk Health",
+        "etats": {
+         "1": "Normal",
+         "2": "Warning",
+         "3": "Critical",
+         "4": "Failing"
+        },
+        "gravites": {
+         "1": 0,
+         "2": 1,
+         "3": 2,
+         "4": 2
+        },
+        "table": "diskTable",
+        "diviseur": null
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

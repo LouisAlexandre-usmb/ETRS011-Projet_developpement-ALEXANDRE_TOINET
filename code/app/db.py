@@ -4,6 +4,7 @@ Pas d'ORM : le SQL est écrit à la main. Chaque fonction ouvre sa propre
 connexion et la referme ; pour le volume de ce projet, c'est plus simple à suivre qu'un pool
 de connexions partagées.
 """
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,6 +15,35 @@ from app import config
 # Structure de la base, créée au démarrage si elle n'existe pas encore : ne modifie jamais une base
 # existante. Une colonne ajoutée à une table existante doit aussi l'être dans _migrer.
 # Noms en snake_case, d'après le modèle de classes UML validé.
+TABLE_ALERTE = """
+-- Alertes : EQUIPEMENT = ne répond plus au ping ; SERVICE = joignable, mais relevé SNMP en erreur,
+-- seuil dépassé ou interface suivie en panne. cause_racine_id relie une alerte à celle de
+-- l'équipement parent en panne.
+CREATE TABLE IF NOT EXISTS alerte (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id   INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    categorie       TEXT NOT NULL CHECK (categorie IN ('EQUIPEMENT', 'SERVICE')),
+    code            TEXT NOT NULL
+                        CHECK (code IN ('INJOIGNABLE', 'SNMP_EN_ECHEC', 'RELEVE_EN_ECHEC', 'SEUIL_DEPASSE',
+                                        'INTERFACE_DOWN')),
+    metrique_id     INTEGER REFERENCES metrique(id) ON DELETE CASCADE,
+    objet_id        INTEGER REFERENCES objet_detecte(id) ON DELETE CASCADE,   -- seuil d'un objet détecté
+    interface_id    INTEGER REFERENCES interface(id) ON DELETE CASCADE,       -- interface en panne
+    message         TEXT NOT NULL,
+    criticite       TEXT NOT NULL DEFAULT 'AVERTISSEMENT' CHECK (criticite IN ('AVERTISSEMENT', 'CRITIQUE')),
+    statut          TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (statut IN ('ACTIVE', 'CLOTUREE')),
+    date_debut      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    date_fin        TEXT,
+    cause_racine_id INTEGER REFERENCES alerte(id) ON DELETE SET NULL
+);
+"""
+# Une seule alerte active par équipement, type d'alerte et service (mesure, objet ou interface).
+INDEX_ALERTE = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alerte_active
+    ON alerte (equipement_id, code, COALESCE(metrique_id, 0), COALESCE(objet_id, 0), COALESCE(interface_id, 0))
+    WHERE statut = 'ACTIVE';
+"""
+
 SCHEMA = """
 -- Catalogue des métriques pouvant être collectées (cpu, ram, uptime...).
 CREATE TABLE IF NOT EXISTS metrique (
@@ -35,8 +65,7 @@ CREATE TABLE IF NOT EXISTS groupe (
 CREATE TABLE IF NOT EXISTS modele_supervision (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     nom         TEXT NOT NULL UNIQUE,
-    description TEXT,
-    prefixe_sys_object_id TEXT              -- détection automatique du modèle à l'ajout
+    description TEXT
 );
 
 -- Association modele_supervision <-> metrique, portant l'OID à interroger.
@@ -45,6 +74,9 @@ CREATE TABLE IF NOT EXISTS element_surveille (
     modele_supervision_id INTEGER NOT NULL REFERENCES modele_supervision(id) ON DELETE CASCADE,
     metrique_id           INTEGER NOT NULL REFERENCES metrique(id) ON DELETE CASCADE,
     oid                   TEXT NOT NULL,
+    methode               TEXT,    -- calcul d'un modèle de constructeur ; NULL = calcul propre à l'OID
+    oid_secondaire        TEXT,    -- second OID d'un ratio
+    diviseur              REAL,    -- valeur à diviser (dixièmes...) ; pour un ratio, unité des tailles
     actif                 INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     UNIQUE (modele_supervision_id, metrique_id)
 );
@@ -66,6 +98,8 @@ CREATE TABLE IF NOT EXISTS equipement (
     nb_echecs_consecutifs   INTEGER NOT NULL DEFAULT 0,
     description_systeme     TEXT,                   -- sysDescr
     sys_object_id           TEXT,                   -- identifie le constructeur et le modèle
+    identification_requise  INTEGER NOT NULL DEFAULT 0, -- modèle à réidentifier (après une mise à jour)
+    systeme                 TEXT,                   -- constructeur reconnu (modèle intégré)
     date_ajout              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
     derniere_collecte       TEXT,
     groupe_id               INTEGER REFERENCES groupe(id) ON DELETE SET NULL,
@@ -106,9 +140,25 @@ CREATE TABLE IF NOT EXISTS mesure (
     metrique_id   INTEGER NOT NULL REFERENCES metrique(id),
     interface_id  INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     horodatage    TEXT NOT NULL,
-    valeur        REAL
+    valeur        REAL,
+    utilise       REAL,             -- RAM ou disque : espace utilisé, en octets
+    total         REAL,             -- RAM ou disque : espace total, en octets
+    detail        TEXT              -- disque : volume concerné (le plus rempli)
 );
 CREATE INDEX IF NOT EXISTS idx_mesure_lecture ON mesure (equipement_id, metrique_id, horodatage);
+
+-- Détail de la capacité disque : chaque volume à chaque relevé (la mesure « disque » ne garde que
+-- le plus rempli, qui sert aux seuils et aux alertes).
+CREATE TABLE IF NOT EXISTS mesure_volume (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    horodatage    TEXT NOT NULL,
+    nom           TEXT NOT NULL,
+    valeur        REAL NOT NULL,    -- % utilisé
+    utilise       REAL,             -- octets
+    total         REAL              -- octets
+);
+CREATE INDEX IF NOT EXISTS idx_mesure_volume ON mesure_volume (equipement_id, horodatage);
 
 -- Historique des changements de statut d'un équipement.
 CREATE TABLE IF NOT EXISTS changement_statut (
@@ -139,23 +189,68 @@ CREATE TABLE IF NOT EXISTS seuils_config (
     valeur_critique REAL NOT NULL DEFAULT 95 CHECK (valeur_critique BETWEEN 0 AND 100)
 );
 
--- Seuils propres à un équipement : ils remplacent le réglage global pour ce service.
-CREATE TABLE IF NOT EXISTS seuil_equipement (
-    equipement_id   INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
-    metrique_id     INTEGER NOT NULL REFERENCES metrique(id) ON DELETE CASCADE,
-    valeur          REAL NOT NULL CHECK (valeur BETWEEN 0 AND 100),
-    valeur_critique REAL NOT NULL CHECK (valeur_critique BETWEEN 0 AND 100),
+-- Seuils d'un équipement, sur un service de mesure (metrique_id) ou un objet détecté (objet_id).
+-- Limites dans l'unité du service (%, Mb/s, minutes, °C...). Sans ligne pour CPU, RAM ou disque,
+-- les valeurs par défaut de seuils_config s'appliquent.
+CREATE TABLE IF NOT EXISTS seuil (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    metrique_id   INTEGER REFERENCES metrique(id) ON DELETE CASCADE,
+    objet_id      INTEGER REFERENCES objet_detecte(id) ON DELETE CASCADE,
+    operateur     TEXT NOT NULL DEFAULT '>' CHECK (operateur IN ('>', '<', '=')),
+    avertissement REAL,
+    critique      REAL,
+    actif         INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    CHECK ((metrique_id IS NULL) != (objet_id IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seuil_cible
+    ON seuil (equipement_id, COALESCE(metrique_id, 0), COALESCE(objet_id, 0));
+
+-- Services de mesure qu'un équipement ne relève plus, au choix de l'admin (CPU, trafic...).
+CREATE TABLE IF NOT EXISTS service_ignore (
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    metrique_id   INTEGER NOT NULL REFERENCES metrique(id) ON DELETE CASCADE,
     PRIMARY KEY (equipement_id, metrique_id)
 );
 
--- Réglages propres à un service d'un équipement : NULL = valeur de l'équipement.
-CREATE TABLE IF NOT EXISTS reglage_service (
-    equipement_id      INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
-    metrique_id        INTEGER NOT NULL REFERENCES metrique(id) ON DELETE CASCADE,
-    intervalle_polling INTEGER,
-    nb_echecs          INTEGER,
-    PRIMARY KEY (equipement_id, metrique_id)
+CREATE TABLE IF NOT EXISTS modele_objets (
+    nom       TEXT PRIMARY KEY,
+    contenu   TEXT NOT NULL,
+    ajoute_le TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
 );
+
+-- Objets d'un modèle d'objets auxquels un équipement a répondu lors de la détection.
+CREATE TABLE IF NOT EXISTS objet_detecte (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    modele_nom    TEXT NOT NULL REFERENCES modele_objets(nom) ON DELETE CASCADE,
+    mib           TEXT NOT NULL,
+    objet         TEXT NOT NULL,
+    oid           TEXT NOT NULL,
+    table_nom     TEXT,            -- NULL pour une valeur simple
+    nature        TEXT NOT NULL CHECK (nature IN ('MESURE', 'ETAT', 'COMPTEUR', 'TEXTE')),
+    description   TEXT,
+    etats         TEXT,            -- libellés des valeurs, au format JSON
+    garde         INTEGER NOT NULL DEFAULT 1 CHECK (garde IN (0, 1)),  -- choisi par l'admin
+    UNIQUE (equipement_id, mib, objet)
+);
+
+-- Dernière valeur de chaque instance : un disque, un volume...
+CREATE TABLE IF NOT EXISTS valeur_objet (
+    objet_id INTEGER NOT NULL REFERENCES objet_detecte(id) ON DELETE CASCADE,
+    instance TEXT NOT NULL,
+    valeur   TEXT,
+    PRIMARY KEY (objet_id, instance)
+);
+
+-- Historique des objets numériques, pour leurs graphiques.
+CREATE TABLE IF NOT EXISTS mesure_objet (
+    objet_id   INTEGER NOT NULL REFERENCES objet_detecte(id) ON DELETE CASCADE,
+    instance   TEXT NOT NULL,
+    horodatage TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    valeur     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mesure_objet ON mesure_objet (objet_id, horodatage);
 
 -- Criticité des alertes qui ne dépendent pas d'un seuil.
 CREATE TABLE IF NOT EXISTS criticite_service (
@@ -163,27 +258,7 @@ CREATE TABLE IF NOT EXISTS criticite_service (
     libelle   TEXT NOT NULL,
     criticite TEXT NOT NULL CHECK (criticite IN ('AVERTISSEMENT', 'CRITIQUE'))
 );
-
--- Alertes : EQUIPEMENT = ne répond plus au ping ; SERVICE = joignable, mais relevé SNMP en erreur
--- ou seuil dépassé. cause_racine_id relie une alerte à celle de l'équipement parent en panne.
-CREATE TABLE IF NOT EXISTS alerte (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    equipement_id   INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
-    categorie       TEXT NOT NULL CHECK (categorie IN ('EQUIPEMENT', 'SERVICE')),
-    code            TEXT NOT NULL
-                        CHECK (code IN ('INJOIGNABLE', 'SNMP_EN_ECHEC', 'RELEVE_EN_ECHEC', 'SEUIL_DEPASSE')),
-    metrique_id     INTEGER REFERENCES metrique(id) ON DELETE CASCADE,
-    message         TEXT NOT NULL,
-    criticite       TEXT NOT NULL DEFAULT 'AVERTISSEMENT' CHECK (criticite IN ('AVERTISSEMENT', 'CRITIQUE')),
-    statut          TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (statut IN ('ACTIVE', 'CLOTUREE')),
-    date_debut      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
-    date_fin        TEXT,
-    cause_racine_id INTEGER REFERENCES alerte(id) ON DELETE SET NULL
-);
--- Une seule alerte active par équipement, type d'alerte et métrique.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_alerte_active
-    ON alerte (equipement_id, code, COALESCE(metrique_id, 0)) WHERE statut = 'ACTIVE';
-"""
+""" + TABLE_ALERTE + INDEX_ALERTE
 
 
 @contextmanager
@@ -202,18 +277,70 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    """Crée les tables si besoin et pré-remplit le catalogue de base (appelé au démarrage)."""
+    """Crée les tables si besoin et ajoute les modèles intégrés (appelé au démarrage)."""
     with get_connection() as connexion:
+        _autoriser_alertes_interface(connexion)   # avant le schéma : il recrée l'index des alertes
         connexion.executescript(SCHEMA)
         _migrer(connexion)
         _seed(connexion)
 
 
-MODELE_GENERIQUE = 1   # repli pour un équipement dont ni le CPU ni la RAM ne répondent
+def _autoriser_alertes_interface(connexion: sqlite3.Connection) -> None:
+    """Bases d'avant les alertes d'interface : la table des alertes refuse ce nouveau type (contrainte
+    sur le code) et ne sait pas désigner une interface. SQLite ne modifie pas une contrainte : la
+    table est recréée, avec toutes ses alertes. Les colonnes ajoutées au fil des versions (criticité,
+    objet) sont reprises, ou reçoivent leur valeur par défaut."""
+    ligne = connexion.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alerte'").fetchone()
+    if ligne is None or "INTERFACE_DOWN" in ligne[0]:
+        return
+    anciennes = [colonne["name"] for colonne in connexion.execute("PRAGMA table_info(alerte)")]
+    # Clés étrangères suspendues le temps de l'opération (comme le recommande SQLite), hors transaction :
+    # les tables parentes (objets, interfaces) n'existent pas encore dans une très ancienne base
+    connexion.execute("PRAGMA foreign_keys = OFF")
+    try:
+        connexion.execute("DROP INDEX IF EXISTS idx_alerte_active")
+        connexion.execute("ALTER TABLE alerte RENAME TO alerte_ancienne")
+        connexion.execute(TABLE_ALERTE.replace("IF NOT EXISTS ", ""))
+        nouvelles = [colonne["name"] for colonne in connexion.execute("PRAGMA table_info(alerte)")]
+        communes = ", ".join(colonne for colonne in nouvelles if colonne in anciennes)
+        connexion.execute(f"INSERT INTO alerte ({communes}) SELECT {communes} FROM alerte_ancienne")
+        connexion.execute("DROP TABLE alerte_ancienne")
+        if "criticite" not in anciennes:   # toute première version : une panne était toujours critique
+            connexion.execute("UPDATE alerte SET criticite = 'CRITIQUE' WHERE code IN ('INJOIGNABLE', 'SNMP_EN_ECHEC')")
+        connexion.commit()
+    finally:
+        connexion.execute("PRAGMA foreign_keys = ON")
+
+
+MODELE_GENERIQUE = 1        # disponibilité et trafic seulement
+MODELE_HOTE_STANDARD = 3    # CPU, RAM et disques par les MIB standard (HOST-RESOURCES, UCD-SNMP)
+MODELES_GENERIQUES = (MODELE_GENERIQUE, MODELE_HOTE_STANDARD)
+FICHIER_MODELES_INTEGRES = Path(__file__).resolve().parent / "modeles_integres.json"
+_integres: dict | None = None
+
+
+def modeles_integres() -> dict:
+    """Contenu de modeles_integres.json : modèles d'objets génériques et modèles des constructeurs."""
+    global _integres
+    if _integres is None:
+        _integres = json.loads(FICHIER_MODELES_INTEGRES.read_text(encoding="utf-8"))
+    return _integres
+
+
+def constructeurs() -> list[dict]:
+    """Modèles des constructeurs (Cisco, Aruba, QNAP, Synology) : règles de reconnaissance, indicateurs
+    CPU / mémoire / disque et capteurs."""
+    return modeles_integres()["constructeurs"]
+
+
+OID_HR_PROCESSOR_LOAD = "1.3.6.1.2.1.25.3.3.1.2"
+OID_HR_STORAGE_USED = "1.3.6.1.2.1.25.2.3.1.6"
 
 
 def _migrer(connexion: sqlite3.Connection) -> None:
     """Ajoute aux bases existantes les colonnes que CREATE TABLE IF NOT EXISTS ne crée pas."""
+    # Base d'avant la reconnaissance des constructeurs : ses équipements seront tous identifiés une fois
+    sans_constructeur = "systeme" not in {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(equipement)")}
     colonnes = {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(interface)")}
     if "suivi" not in colonnes:
         connexion.execute(
@@ -227,9 +354,17 @@ def _migrer(connexion: sqlite3.Connection) -> None:
         )
     for table, colonne, type_colonne in (
         ("equipement", "sys_object_id", "TEXT"),
-        ("modele_supervision", "prefixe_sys_object_id", "TEXT"),
         ("equipement", "nb_echecs_alerte", "INTEGER"),
         ("equipement", "duree_conservation", "INTEGER"),
+        ("element_surveille", "methode", "TEXT"),
+        ("element_surveille", "oid_secondaire", "TEXT"),
+        ("equipement", "identification_requise", "INTEGER NOT NULL DEFAULT 0"),
+        ("element_surveille", "diviseur", "REAL"),
+        ("equipement", "systeme", "TEXT"),
+        ("mesure", "utilise", "REAL"),
+        ("mesure", "total", "REAL"),
+        ("mesure", "detail", "TEXT"),
+        ("objet_detecte", "garde", "INTEGER NOT NULL DEFAULT 1"),
     ):
         if colonne not in {ligne["name"] for ligne in connexion.execute(f"PRAGMA table_info({table})")}:
             connexion.execute(f"ALTER TABLE {table} ADD COLUMN {colonne} {type_colonne}")
@@ -240,12 +375,6 @@ def _migrer(connexion: sqlite3.Connection) -> None:
         )
         # Un seuil déjà réglé au-dessus de 95 % ne doit pas dépasser son niveau critique
         connexion.execute("UPDATE seuils_config SET valeur_critique = MAX(valeur, valeur_critique)")
-    if "criticite" not in {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(alerte)")}:
-        connexion.execute(
-            "ALTER TABLE alerte ADD COLUMN criticite TEXT NOT NULL DEFAULT 'AVERTISSEMENT' "
-            "CHECK (criticite IN ('AVERTISSEMENT', 'CRITIQUE'))"
-        )
-        connexion.execute("UPDATE alerte SET criticite = 'CRITIQUE' WHERE code IN ('INJOIGNABLE', 'SNMP_EN_ECHEC')")
     # Un seuil propre décoché revient désormais au réglage global : il n'a plus lieu d'exister
     if "actif" in {ligne["name"] for ligne in connexion.execute("PRAGMA table_info(seuil_equipement)")}:
         connexion.execute("DELETE FROM seuil_equipement WHERE actif = 0")
@@ -260,8 +389,53 @@ def _migrer(connexion: sqlite3.Connection) -> None:
             (MODELE_GENERIQUE, modele["id"]),
         )
         connexion.execute("DELETE FROM modele_supervision WHERE id = ?", (modele["id"],))
+    if sans_constructeur:
+        connexion.execute("UPDATE equipement SET identification_requise = 1")
+    # Les réglages par service (intervalle, échecs avant alerte) n'existent plus : chaque service
+    # suit les réglages de son équipement
+    connexion.execute("DROP TABLE IF EXISTS reglage_service")
+    # Les seuils propres d'avant deviennent des seuils « supérieur à » de l'équipement
+    if connexion.execute("SELECT 1 FROM sqlite_master WHERE name = 'seuil_equipement'").fetchone():
+        connexion.execute(
+            "INSERT OR IGNORE INTO seuil (equipement_id, metrique_id, operateur, avertissement, critique) "
+            "SELECT equipement_id, metrique_id, '>', valeur, valeur_critique FROM seuil_equipement"
+        )
+        connexion.execute("DROP TABLE seuil_equipement")
+    # Le générique ne relève plus CPU, RAM ni disque : c'est le rôle de l'hôte standard
+    if connexion.execute(
+        "SELECT 1 FROM element_surveille JOIN metrique ON metrique.id = element_surveille.metrique_id "
+        "WHERE modele_supervision_id = ? AND metrique.code IN ('cpu', 'ram', 'disque')", (MODELE_GENERIQUE,),
+    ).fetchone():
+        connexion.execute("UPDATE equipement SET identification_requise = 1 WHERE modele_supervision_id = ?",
+                          (MODELE_GENERIQUE,))
+        connexion.execute(
+            "DELETE FROM element_surveille WHERE modele_supervision_id = ? AND metrique_id IN "
+            "(SELECT id FROM metrique WHERE code IN ('cpu', 'ram', 'disque'))", (MODELE_GENERIQUE,),
+        )
+    # L'hôte standard lit d'abord HOST-RESOURCES-MIB, puis UCD-SNMP-MIB en secours (côté collecte)
+    for code, oid in (("cpu", OID_HR_PROCESSOR_LOAD), ("ram", OID_HR_STORAGE_USED)):
+        connexion.execute(
+            "UPDATE element_surveille SET oid = ?, methode = NULL, oid_secondaire = NULL "
+            "WHERE modele_supervision_id = ? AND metrique_id = (SELECT id FROM metrique WHERE code = ?)",
+            (oid, MODELE_HOTE_STANDARD, code),
+        )
+    # Colonnes des versions précédentes que plus rien ne lit : ancienne détection des modèles, catalogue,
+    # versions multiples d'un modèle, activation des seuils globaux
+    for table, colonne in (("modele_supervision", "prefixe_sys_object_id"), ("modele_supervision", "oid_signature"),
+                           ("modele_supervision", "empreinte"), ("parametres_generaux", "catalogue_initialise"),
+                           ("seuils_config", "actif"), ("modele_supervision", "source"),
+                           ("modele_supervision", "modele_source"), ("modele_objets", "integre")):
+        if colonne in {ligne["name"] for ligne in connexion.execute(f"PRAGMA table_info({table})")}:
+            connexion.execute(f"ALTER TABLE {table} DROP COLUMN {colonne}")
     if "visible" in colonnes:  # ancienne colonne de masquage : sa décision est reprise une fois
         connexion.execute("UPDATE interface SET suivi = 'NON', visible = 1 WHERE visible = 0")
+
+
+ELEMENTS_COMMUNS = [
+    ("uptime", "1.3.6.1.2.1.1.3.0"),           # sysUpTime, scalaire
+    ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
+    ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
+]
 
 
 def _seed(connexion: sqlite3.Connection) -> None:
@@ -272,6 +446,7 @@ def _seed(connexion: sqlite3.Connection) -> None:
         ("uptime", "Disponibilité (uptime)", None, "COMPTEUR", 0),
         ("cpu", "Charge CPU", "%", "JAUGE", 0),
         ("ram", "Mémoire utilisée", "%", "JAUGE", 0),
+        ("disque", "Capacité disque", "%", "JAUGE", 0),
         ("if_in_octets", "Trafic entrant", "octets", "COMPTEUR", 1),
         ("if_out_octets", "Trafic sortant", "octets", "COMPTEUR", 1),
     ]
@@ -281,59 +456,53 @@ def _seed(connexion: sqlite3.Connection) -> None:
         metriques,
     )
 
-    elements_communs = [
-        ("uptime", "1.3.6.1.2.1.1.3.0"),           # sysUpTime, scalaire
-        ("if_in_octets", "1.3.6.1.2.1.2.2.1.10"),  # ifInOctets, ifTable (une valeur par interface)
-        ("if_out_octets", "1.3.6.1.2.1.2.2.1.16"), # ifOutOctets, ifTable (une valeur par interface)
-    ]
+    connexion.execute(
+        "INSERT OR IGNORE INTO modele_supervision (id, nom) VALUES (?, 'Équipement générique')", (MODELE_GENERIQUE,),
+    )
+    connexion.execute(
+        "UPDATE modele_supervision SET nom = 'Équipement générique', description = ? WHERE id = ?",
+        ("Disponibilité, uptime et trafic des interfaces (MIB-II) : convient à tout équipement SNMP.", MODELE_GENERIQUE),
+    )
+    _inserer_elements_surveilles(connexion, MODELE_GENERIQUE, ELEMENTS_COMMUNS)
 
     connexion.execute(
-        "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
-        "(1, 'Équipement générique', "
-        "'Basé sur la MIB-II (groupe system et ifTable) et HOST-RESOURCES-MIB pour cpu/ram ; "
-        "cpu/ram ne fonctionnent que sur les agents qui implémentent cette dernière')"
+        "INSERT OR IGNORE INTO modele_supervision (id, nom) VALUES (?, 'Hôte standard')", (MODELE_HOTE_STANDARD,),
     )
-    _inserer_elements_surveilles(connexion, 1, elements_communs + [
-        # HOST-RESOURCES-MIB : marche sur un agent générique (Linux...), pas forcément sur
-        # un équipement réseau avec un OS propriétaire -> à surveiller côté erreur_collecte.
-        ("cpu", "1.3.6.1.2.1.25.3.3.1.2"),  # hrProcessorLoad, table à moyenner (plusieurs cœurs)
-        ("ram", "1.3.6.1.2.1.25.2.3.1.6"),  # hrStorageUsed, à combiner avec hrStorageSize
-                                             # et filtrer sur hrStorageType = RAM (côté collecte)
-    ])
-
     connexion.execute(
-        "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
-        "(2, 'Switch Cisco', "
-        "'Basé sur la MIB-II (groupe system et ifTable), et sur CISCO-PROCESS-MIB / "
-        "CISCO-MEMORY-POOL-MIB pour cpu/ram (IOS ne supporte pas HOST-RESOURCES-MIB)')"
+        "UPDATE modele_supervision SET nom = 'Hôte standard', description = ? WHERE id = ?",
+        ("CPU, mémoire et disques par HOST-RESOURCES-MIB, ou UCD-SNMP-MIB en secours : serveurs Linux "
+         "et Windows, NAS, routeurs MikroTik, pfSense...", MODELE_HOTE_STANDARD),
     )
-    _inserer_elements_surveilles(connexion, 2, elements_communs + [
-        ("cpu", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),  # cpmCPUTotal5minRev, déjà en %
-        ("ram", "1.3.6.1.4.1.9.9.48.1.1.1.5"),     # ciscoMemoryPoolUsed, à combiner avec
-                                                     # ciscoMemoryPoolFree (côté collecte)
+    _inserer_elements_surveilles(connexion, MODELE_HOTE_STANDARD, ELEMENTS_COMMUNS + [
+        ("cpu", OID_HR_PROCESSOR_LOAD),   # hrProcessorLoad, moyenne des cœurs
+        ("ram", OID_HR_STORAGE_USED),     # ligne « mémoire vive » de hrStorageTable
+        ("disque", OID_HR_STORAGE_USED),  # disques fixes de hrStorageTable
     ])
 
-    connexion.execute(
-        "INSERT OR IGNORE INTO modele_supervision (id, nom, description) VALUES "
-        "(3, 'Serveur ou NAS Linux', "
-        "'Basé sur la MIB-II (groupe system et ifTable), et sur UCD-SNMP-MIB pour cpu/ram "
-        "(agent Net-SNMP)')"
-    )
-    _inserer_elements_surveilles(connexion, 3, elements_communs + [
-        ("cpu", "1.3.6.1.4.1.2021.11.11.0"),  # ssCpuIdle, à soustraire de 100 (côté collecte)
-        ("ram", "1.3.6.1.4.1.2021.4.5.0"),    # memTotalReal, à combiner avec memAvailReal (côté collecte)
-    ])
+    # Modèles des constructeurs : indicateurs CPU / mémoire / disque, à numéro fixe
+    for constructeur in constructeurs():
+        id_modele = constructeur["id_modele"]
+        connexion.execute("INSERT OR IGNORE INTO modele_supervision (id, nom) VALUES (?, ?)", (id_modele, constructeur["nom"]))
+        connexion.execute("UPDATE modele_supervision SET nom = ?, description = ? WHERE id = ?",
+                          (constructeur["nom"], constructeur["description"], id_modele))
+        connexion.execute("DELETE FROM element_surveille WHERE modele_supervision_id = ?", (id_modele,))
+        _inserer_elements_surveilles(connexion, id_modele, ELEMENTS_COMMUNS + [tuple(e) for e in constructeur["elements"]])
 
-    # Préfixes de sysObjectID (identifiant d'entreprise) qui désignent automatiquement un modèle
-    connexion.executemany(
-        "UPDATE modele_supervision SET prefixe_sys_object_id = ? WHERE id = ?",
-        [("1.3.6.1.4.1.9", 2), ("1.3.6.1.4.1.8072", 3)],
-    )
-    for code in ("cpu", "ram"):
+    # Modèles d'objets : capteurs génériques, et ceux de chaque constructeur (limités à ses équipements)
+    modeles = list(modeles_integres()["modeles"]) + [
+        {**c["objets"], "systeme": c["systeme"],
+         "description": f"Cherchés seulement sur les équipements reconnus comme « {c['systeme']} »"} for c in constructeurs()]
+    for modele in modeles:
+        connexion.execute(
+            "INSERT INTO modele_objets (nom, contenu) VALUES (?, ?) ON CONFLICT (nom) DO UPDATE SET contenu = excluded.contenu",
+            (modele["nom"], json.dumps(modele, ensure_ascii=False)),
+        )
+
+    for code, avertissement, critique in (("cpu", 90, 95), ("ram", 90, 95), ("disque", 85, 95)):
         connexion.execute(
             "INSERT OR IGNORE INTO seuils_config (metrique_id, valeur, valeur_critique) "
-            "SELECT id, 90, 95 FROM metrique WHERE code = ?",
-            (code,),
+            "SELECT id, ?, ? FROM metrique WHERE code = ?",
+            (avertissement, critique, code),
         )
     connexion.executemany(
         "INSERT OR IGNORE INTO criticite_service (code, libelle, criticite) VALUES (?, ?, ?)",
@@ -341,21 +510,23 @@ def _seed(connexion: sqlite3.Connection) -> None:
             ("INJOIGNABLE", "Équipement injoignable (ping)", "CRITIQUE"),
             ("SNMP_EN_ECHEC", "Service SNMP sans réponse", "CRITIQUE"),
             ("RELEVE_EN_ECHEC", "Indicateur qui ne répond plus", "AVERTISSEMENT"),
+            ("INTERFACE_DOWN", "Interface suivie en panne (down)", "AVERTISSEMENT"),
         ],
     )
 
 
 def _inserer_elements_surveilles(connexion: sqlite3.Connection, modele_supervision_id: int,
-                                  elements: list[tuple[str, str]]) -> None:
-    """Associe une liste de (code métrique, oid) à un modèle de supervision."""
-    for code, oid in elements:
+                                  elements: list[tuple]) -> None:
+    """Associe une liste de (code métrique, oid[, méthode, oid secondaire[, diviseur]]) à un modèle."""
+    for code, oid, *calcul in elements:
+        methode, oid_secondaire, diviseur = (list(calcul) + [None, None, None])[:3]
         metrique_id = connexion.execute(
             "SELECT id FROM metrique WHERE code = ?", (code,)
         ).fetchone()["id"]
         connexion.execute(
-            "INSERT OR IGNORE INTO element_surveille (modele_supervision_id, metrique_id, oid) "
-            "VALUES (?, ?, ?)",
-            (modele_supervision_id, metrique_id, oid),
+            "INSERT OR IGNORE INTO element_surveille "
+            "(modele_supervision_id, metrique_id, oid, methode, oid_secondaire, diviseur) VALUES (?, ?, ?, ?, ?, ?)",
+            (modele_supervision_id, metrique_id, oid, methode, oid_secondaire, diviseur),
         )
 
 
@@ -409,41 +580,19 @@ def modifier_reglage_equipement(id_equipement: int, champ: str, valeur: int | No
 
 
 def services_de_l_equipement(equipement_id: int) -> list[sqlite3.Row]:
-    """Services surveillés par un équipement (ceux de son modèle), avec leurs réglages propres."""
+    """Services relevés sur un équipement : ceux de son modèle, sauf ceux que l'admin a écartés."""
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT metrique.id AS metrique_id, metrique.code, metrique.libelle, "
-            "reglage.intervalle_polling, reglage.nb_echecs, reglage.equipement_id IS NOT NULL AS personnalise "
+            "SELECT metrique.id AS metrique_id, metrique.code, metrique.libelle "
             "FROM equipement "
             "JOIN element_surveille ON element_surveille.modele_supervision_id = equipement.modele_supervision_id "
             " AND element_surveille.actif = 1 "
             "JOIN metrique ON metrique.id = element_surveille.metrique_id "
-            "LEFT JOIN reglage_service AS reglage ON reglage.equipement_id = equipement.id "
-            " AND reglage.metrique_id = metrique.id "
-            "WHERE equipement.id = ? ORDER BY metrique.libelle",
+            "WHERE equipement.id = ? AND metrique.id NOT IN "
+            "(SELECT metrique_id FROM service_ignore WHERE service_ignore.equipement_id = equipement.id) "
+            "ORDER BY metrique.libelle",
             (equipement_id,),
         ).fetchall()
-
-
-def enregistrer_reglage_service(equipement_id: int, metrique_id: int, intervalle_polling: int | None,
-                                 nb_echecs: int | None) -> None:
-    """Crée ou met à jour les réglages propres à un service d'un équipement."""
-    with get_connection() as connexion:
-        connexion.execute(
-            "INSERT INTO reglage_service (equipement_id, metrique_id, intervalle_polling, nb_echecs) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT (equipement_id, metrique_id) DO UPDATE SET "
-            "intervalle_polling = excluded.intervalle_polling, nb_echecs = excluded.nb_echecs",
-            (equipement_id, metrique_id, intervalle_polling, nb_echecs),
-        )
-
-
-def supprimer_reglage_service(equipement_id: int, metrique_id: int) -> None:
-    """Fait revenir un service aux réglages de son équipement."""
-    with get_connection() as connexion:
-        connexion.execute(
-            "DELETE FROM reglage_service WHERE equipement_id = ? AND metrique_id = ?",
-            (equipement_id, metrique_id),
-        )
 
 
 def modifier_parametres(intervalle_polling: int, nb_echecs: int, duree_conservation: int) -> None:
@@ -457,21 +606,10 @@ def modifier_parametres(intervalle_polling: int, nb_echecs: int, duree_conservat
 
 
 def compter_reglages_propres() -> dict[str, int]:
-    """Nombre d'équipements qui ont un réglage propre, à leur niveau ou sur l'un de leurs services."""
+    """Nombre d'équipements qui ont leur propre réglage, pour chaque réglage de collecte."""
     with get_connection() as connexion:
-        return {
-            "intervalle_polling": connexion.execute(
-                "SELECT count(*) FROM equipement WHERE intervalle_polling IS NOT NULL OR id IN "
-                "(SELECT equipement_id FROM reglage_service WHERE intervalle_polling IS NOT NULL)"
-            ).fetchone()[0],
-            "nb_echecs_alerte": connexion.execute(
-                "SELECT count(*) FROM equipement WHERE nb_echecs_alerte IS NOT NULL OR id IN "
-                "(SELECT equipement_id FROM reglage_service WHERE nb_echecs IS NOT NULL)"
-            ).fetchone()[0],
-            "duree_conservation": connexion.execute(
-                "SELECT count(*) FROM equipement WHERE duree_conservation IS NOT NULL"
-            ).fetchone()[0],
-        }
+        return {champ: connexion.execute(f"SELECT count(*) FROM equipement WHERE {champ} IS NOT NULL").fetchone()[0]
+                for champ in ("intervalle_polling", "nb_echecs_alerte", "duree_conservation")}
 
 
 def purger_donnees_anciennes() -> int:
@@ -488,6 +626,9 @@ def purger_donnees_anciennes() -> int:
             duree = equipement["duree_conservation"] or defaut
             for requete in (
                 f"DELETE FROM mesure WHERE equipement_id = ? AND horodatage < {limite}",
+                f"DELETE FROM mesure_volume WHERE equipement_id = ? AND horodatage < {limite}",
+                "DELETE FROM mesure_objet WHERE objet_id IN (SELECT id FROM objet_detecte WHERE equipement_id = ?) "
+                f"AND horodatage < {limite}",
                 f"DELETE FROM erreur_collecte WHERE equipement_id = ? AND horodatage < {limite}",
                 f"DELETE FROM changement_statut WHERE equipement_id = ? AND horodatage < {limite}",
                 f"DELETE FROM alerte WHERE equipement_id = ? AND statut = 'CLOTUREE' AND date_fin < {limite}",
@@ -632,7 +773,7 @@ def lister_mesures(equipement_id: int, code_metrique: str, interface_id: int | N
         parametres.append(jusqu_a)
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT mesure.horodatage, mesure.valeur, mesure.interface_id "
+            "SELECT mesure.horodatage, mesure.valeur, mesure.interface_id, mesure.utilise, mesure.total, mesure.detail "
             "FROM mesure JOIN metrique ON metrique.id = mesure.metrique_id "
             f"WHERE {condition} ORDER BY mesure.horodatage",
             parametres,
@@ -695,15 +836,159 @@ def lister_modeles() -> list[sqlite3.Row]:
         return connexion.execute("SELECT * FROM modele_supervision ORDER BY id").fetchall()
 
 
-def trouver_modele_pour(sys_object_id: str | None) -> int:
-    """Modèle dont le préfixe correspond le mieux au sysObjectID, sinon le modèle générique."""
-    meilleur_id, meilleure_longueur = 1, 0
-    for modele in lister_modeles():
-        prefixe = modele["prefixe_sys_object_id"]
-        if prefixe and sys_object_id and (sys_object_id + ".").startswith(prefixe + ".") \
-                and len(prefixe) > meilleure_longueur:
-            meilleur_id, meilleure_longueur = modele["id"], len(prefixe)
-    return meilleur_id
+def lister_modeles_detail() -> list[sqlite3.Row]:
+    """Modèles avec leur nombre d'équipements et leurs services, pour la section Modèles."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT modele_supervision.*, "
+            "(SELECT count(*) FROM equipement WHERE equipement.modele_supervision_id = modele_supervision.id) "
+            "AS nb_equipements, "
+            "(SELECT group_concat(nom, ', ') FROM (SELECT equipement.nom FROM equipement "
+            " WHERE equipement.modele_supervision_id = modele_supervision.id ORDER BY equipement.nom)) AS noms_equipements, "
+            "(SELECT group_concat(metrique.code, ', ') FROM element_surveille "
+            " JOIN metrique ON metrique.id = element_surveille.metrique_id "
+            " WHERE element_surveille.modele_supervision_id = modele_supervision.id AND metrique.code IN "
+            " ('cpu', 'ram', 'disque')) AS indicateurs "
+            "FROM modele_supervision ORDER BY id"
+        ).fetchall()
+
+
+def lister_modeles_objets() -> list[dict]:
+    """Modèles d'objets, avec le nombre d'objets détectés et d'équipements concernés (les génériques
+    d'abord, puis ceux des constructeurs)."""
+    with get_connection() as connexion:
+        lignes = connexion.execute(
+            "SELECT contenu, "
+            "(SELECT count(*) FROM objet_detecte WHERE objet_detecte.modele_nom = modele_objets.nom) AS nb_objets, "
+            # Équipements de ce constructeur, ou sur lesquels ses objets ont été détectés
+            # (noms qualifiés : « nom » désignerait sinon celui de l'équipement)
+            "(SELECT count(*) FROM equipement WHERE equipement.systeme = json_extract(modele_objets.contenu, '$.systeme') "
+            " OR equipement.id IN (SELECT objet_detecte.equipement_id FROM objet_detecte "
+            "  WHERE objet_detecte.modele_nom = modele_objets.nom)) AS nb_equipements, "
+            "(SELECT group_concat(nom, ', ') FROM (SELECT equipement.nom FROM equipement "
+            " WHERE equipement.systeme = json_extract(modele_objets.contenu, '$.systeme') "
+            " OR equipement.id IN (SELECT objet_detecte.equipement_id FROM objet_detecte "
+            "  WHERE objet_detecte.modele_nom = modele_objets.nom) ORDER BY equipement.nom)) AS noms_equipements "
+            "FROM modele_objets ORDER BY json_extract(contenu, '$.systeme') IS NOT NULL, nom"
+        ).fetchall()
+    return [{**json.loads(ligne["contenu"]), "nb_objets": ligne["nb_objets"], "nb_equipements": ligne["nb_equipements"],
+             "noms_equipements": ligne["noms_equipements"]} for ligne in lignes]
+
+
+def definir_systeme(id_equipement: int, systeme: str | None) -> None:
+    with get_connection() as connexion:
+        connexion.execute("UPDATE equipement SET systeme = ? WHERE id = ?", (systeme, id_equipement))
+
+
+def identification_terminee(id_equipement: int) -> None:
+    with get_connection() as connexion:
+        connexion.execute("UPDATE equipement SET identification_requise = 0 WHERE id = ?", (id_equipement,))
+
+
+def identification_a_refaire(id_equipement: int) -> None:
+    with get_connection() as connexion:
+        connexion.execute("UPDATE equipement SET identification_requise = 1 WHERE id = ?", (id_equipement,))
+
+
+def equipements_a_identifier() -> list[int]:
+    with get_connection() as connexion:
+        return [ligne["id"] for ligne in connexion.execute(
+            "SELECT id FROM equipement WHERE identification_requise = 1 AND actif = 1"
+        )]
+
+
+def remplacer_objets_detectes(equipement_id: int, modele_nom: str, objets: list[dict],
+                              mibs_interrogees: set[str]) -> dict[tuple[str, str], int]:
+    """Enregistre le résultat d'une détection : un objet déjà connu garde son historique. Un objet
+    absent n'est retiré que si sa MIB a répondu : une panne passagère n'efface donc pas l'historique.
+    Renvoie {(mib, objet): id}."""
+    with get_connection() as connexion:
+        cles = set()
+        for objet in objets:
+            cles.add((objet["mib"], objet["objet"]))
+            connexion.execute(
+                "INSERT INTO objet_detecte (equipement_id, modele_nom, mib, objet, oid, table_nom, nature, description, etats) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (equipement_id, mib, objet) DO UPDATE SET "
+                "oid = excluded.oid, table_nom = excluded.table_nom, nature = excluded.nature, "
+                "description = excluded.description, etats = excluded.etats",
+                (equipement_id, modele_nom, objet["mib"], objet["objet"], objet["oid"], objet["table"],
+                 objet["nature"], objet["description"], json.dumps(objet["etats"])),
+            )
+        identifiants = {}
+        for ligne in connexion.execute(
+            "SELECT id, mib, objet FROM objet_detecte WHERE equipement_id = ? AND modele_nom = ?",
+            (equipement_id, modele_nom),
+        ).fetchall():
+            if (ligne["mib"], ligne["objet"]) in cles:
+                identifiants[(ligne["mib"], ligne["objet"])] = ligne["id"]
+            elif ligne["mib"] in mibs_interrogees:
+                connexion.execute("DELETE FROM objet_detecte WHERE id = ?", (ligne["id"],))
+        return identifiants
+
+
+def objets_ignores(equipement_id: int) -> set[int]:
+    with get_connection() as connexion:
+        return {ligne[0] for ligne in connexion.execute(
+            "SELECT id FROM objet_detecte WHERE equipement_id = ? AND garde = 0", (equipement_id,))}
+
+
+def choisir_objets_gardes(equipement_id: int, gardes: set[int]) -> None:
+    """Garde les objets cochés ; les autres ne sont plus affichés ni relevés, et leur historique est effacé."""
+    with get_connection() as connexion:
+        identifiants = [ligne[0] for ligne in connexion.execute(
+            "SELECT id FROM objet_detecte WHERE equipement_id = ?", (equipement_id,))]
+        for identifiant in identifiants:
+            garde = int(identifiant in gardes)
+            connexion.execute("UPDATE objet_detecte SET garde = ? WHERE id = ?", (garde, identifiant))
+            if not garde:
+                connexion.execute("DELETE FROM valeur_objet WHERE objet_id = ?", (identifiant,))
+                connexion.execute("DELETE FROM mesure_objet WHERE objet_id = ?", (identifiant,))
+
+
+def lister_objets_detectes(equipement_id: int) -> list[sqlite3.Row]:
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM objet_detecte WHERE equipement_id = ? ORDER BY mib, table_nom, id", (equipement_id,),
+        ).fetchall()
+
+
+def objets_avec_historique(equipement_id: int) -> set[int]:
+    with get_connection() as connexion:
+        return {ligne[0] for ligne in connexion.execute(
+            "SELECT DISTINCT objet_id FROM mesure_objet WHERE objet_id IN "
+            "(SELECT id FROM objet_detecte WHERE equipement_id = ?)", (equipement_id,),
+        )}
+
+
+def enregistrer_releve_objets(valeurs: list[tuple], mesures: list[tuple]) -> None:
+    """Enregistre en une transaction les dernières valeurs et l'historique d'un relevé. Les valeurs
+    précédentes de ces objets sont remplacées : un disque retiré disparaît de la liste."""
+    with get_connection() as connexion:
+        connexion.executemany("DELETE FROM valeur_objet WHERE objet_id = ?", {(valeur[0],) for valeur in valeurs})
+        connexion.executemany(
+            "INSERT OR REPLACE INTO valeur_objet (objet_id, instance, valeur) VALUES (?, ?, ?)", valeurs,
+        )
+        connexion.executemany(
+            "INSERT INTO mesure_objet (objet_id, instance, valeur) VALUES (?, ?, ?)", mesures,
+        )
+
+
+def lister_valeurs_objets(equipement_id: int) -> list[sqlite3.Row]:
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT valeur_objet.* FROM valeur_objet JOIN objet_detecte ON objet_detecte.id = valeur_objet.objet_id "
+            "WHERE objet_detecte.equipement_id = ?", (equipement_id,),
+        ).fetchall()
+
+
+def lister_mesures_objet(equipement_id: int, objet_id: int) -> list[sqlite3.Row]:
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT mesure_objet.instance, mesure_objet.horodatage, mesure_objet.valeur FROM mesure_objet "
+            "JOIN objet_detecte ON objet_detecte.id = mesure_objet.objet_id "
+            "WHERE mesure_objet.objet_id = ? AND objet_detecte.equipement_id = ? "
+            "ORDER BY mesure_objet.horodatage", (objet_id, equipement_id),
+        ).fetchall()
 
 
 # ---------------------------------------------------------------- groupes
@@ -748,7 +1033,9 @@ def lister_elements_actifs(modele_supervision_id: int) -> list[sqlite3.Row]:
     """Éléments surveillés actifs d'un modèle, avec le code et les propriétés de leur métrique."""
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT element_surveille.oid, metrique.id AS metrique_id, metrique.code, "
+            "SELECT element_surveille.oid, element_surveille.methode, element_surveille.oid_secondaire, "
+            "element_surveille.diviseur, "
+            "metrique.id AS metrique_id, metrique.code, "
             "metrique.type_valeur, metrique.par_interface "
             "FROM element_surveille JOIN metrique ON metrique.id = element_surveille.metrique_id "
             "WHERE element_surveille.modele_supervision_id = ? AND element_surveille.actif = 1",
@@ -757,14 +1044,67 @@ def lister_elements_actifs(modele_supervision_id: int) -> list[sqlite3.Row]:
 
 
 def enregistrer_mesure(equipement_id: int, metrique_id: int, valeur: float | None,
-                        interface_id: int | None = None) -> None:
-    """Enregistre un relevé. valeur = None si l'équipement n'a pas répondu pour cet indicateur."""
+                        interface_id: int | None = None, utilise: float | None = None,
+                        total: float | None = None, detail: str | None = None) -> None:
+    """Enregistre un relevé. valeur = None si l'équipement n'a pas répondu pour cet indicateur.
+    Pour la RAM et le disque, `utilise` et `total` donnent les tailles en octets."""
     with get_connection() as connexion:
         connexion.execute(
-            "INSERT INTO mesure (equipement_id, metrique_id, interface_id, horodatage, valeur) "
-            "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?)",
-            (equipement_id, metrique_id, interface_id, valeur),
+            "INSERT INTO mesure (equipement_id, metrique_id, interface_id, horodatage, valeur, utilise, total, detail) "
+            "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?, ?, ?, ?)",
+            (equipement_id, metrique_id, interface_id, valeur, utilise, total, detail),
         )
+
+
+def enregistrer_volumes(equipement_id: int, volumes: list[tuple]) -> None:
+    """Enregistre chaque volume d'un relevé disque : (nom, %, octets utilisés, octets au total)."""
+    with get_connection() as connexion:
+        connexion.executemany(
+            "INSERT INTO mesure_volume (equipement_id, horodatage, nom, valeur, utilise, total) "
+            "VALUES (?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), ?, ?, ?, ?)",
+            [(equipement_id, *volume) for volume in volumes],
+        )
+
+
+def lister_volumes(equipement_id: int, depuis: str | None = None, jusqu_a: str | None = None) -> list[sqlite3.Row]:
+    condition, parametres = "equipement_id = ?", [equipement_id]
+    if depuis:
+        condition += " AND horodatage >= ?"
+        parametres.append(depuis)
+    if jusqu_a:
+        condition += " AND horodatage <= ?"
+        parametres.append(jusqu_a)
+    with get_connection() as connexion:
+        return connexion.execute(
+            f"SELECT nom, horodatage, valeur, utilise, total FROM mesure_volume WHERE {condition} "
+            "ORDER BY horodatage, nom", parametres,
+        ).fetchall()
+
+
+def derniers_volumes(equipement_id: int) -> list[sqlite3.Row]:
+    """Volumes du dernier relevé disque, du plus rempli au moins rempli."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            # Le dernier relevé de chaque volume encore présent au relevé le plus récent (deux relevés
+            # peuvent tomber dans la même seconde)
+            "SELECT nom, valeur, utilise, total, horodatage FROM mesure_volume WHERE id IN "
+            "(SELECT max(id) FROM mesure_volume WHERE equipement_id = ? AND "
+            " horodatage = (SELECT max(horodatage) FROM mesure_volume WHERE equipement_id = ?) GROUP BY nom) "
+            "ORDER BY valeur DESC",
+            (equipement_id, equipement_id),
+        ).fetchall()
+
+
+def dernieres_mesures(equipement_id: int) -> dict[str, sqlite3.Row]:
+    """Dernier relevé de chaque indicateur global (CPU, RAM, disque, uptime) : {code: ligne}."""
+    with get_connection() as connexion:
+        lignes = connexion.execute(
+            "SELECT metrique.code, mesure.valeur, mesure.utilise, mesure.total, mesure.detail, mesure.horodatage "
+            "FROM mesure JOIN metrique ON metrique.id = mesure.metrique_id "
+            "WHERE mesure.id IN (SELECT max(id) FROM mesure WHERE equipement_id = ? AND interface_id IS NULL "
+            "GROUP BY metrique_id)", (equipement_id,),
+        ).fetchall()
+    return {ligne["code"]: ligne for ligne in lignes}
 
 
 def upsert_interface(equipement_id: int, index_snmp: int, nom: str,
@@ -896,87 +1236,98 @@ def releve_en_echec_persistant(equipement_id: int, metrique_id: int, nb_releves:
 
 # ---------------------------------------------------------------- seuils
 
-def lister_seuils() -> list[sqlite3.Row]:
-    """Renvoie les seuils configurés, avec le code et le libellé de leur métrique."""
+def seuils_par_defaut() -> dict[int, sqlite3.Row]:
+    """Seuils appliqués à CPU, RAM et disque tant qu'un équipement n'a pas réglé les siens."""
     with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT seuils_config.metrique_id, seuils_config.valeur, seuils_config.valeur_critique, "
-            "metrique.code, metrique.libelle, "
-            "(SELECT count(*) FROM seuil_equipement WHERE seuil_equipement.metrique_id = seuils_config.metrique_id) "
-            "AS nb_personnalises "
-            "FROM seuils_config JOIN metrique ON metrique.id = seuils_config.metrique_id "
-            "ORDER BY metrique.libelle"
-        ).fetchall()
+        return {ligne["metrique_id"]: ligne for ligne in connexion.execute("SELECT * FROM seuils_config")}
 
 
-def seuils_de_l_equipement(equipement_id: int) -> list[sqlite3.Row]:
-    """Seuils qui s'appliquent aux services surveillés par un équipement (ceux de son modèle) :
-    ses seuils propres s'il en a, sinon les seuils globaux."""
+def seuils_enregistres(equipement_id: int) -> dict[tuple[str, int], sqlite3.Row]:
+    """Seuils réglés sur un équipement : {("m", metrique_id) ou ("o", objet_id): seuil}."""
+    with get_connection() as connexion:
+        lignes = connexion.execute("SELECT * FROM seuil WHERE equipement_id = ?", (equipement_id,)).fetchall()
+    return {("m", ligne["metrique_id"]) if ligne["metrique_id"] else ("o", ligne["objet_id"]): ligne for ligne in lignes}
+
+
+def enregistrer_seuil(equipement_id: int, metrique_id: int | None, objet_id: int | None, operateur: str,
+                      avertissement: float | None, critique: float | None, actif: bool) -> None:
+    """Crée ou remplace le seuil d'un service de mesure ou d'un objet détecté de cet équipement."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "DELETE FROM seuil WHERE equipement_id = ? AND COALESCE(metrique_id, 0) = ? AND COALESCE(objet_id, 0) = ?",
+            (equipement_id, metrique_id or 0, objet_id or 0),
+        )
+        connexion.execute(
+            "INSERT INTO seuil (equipement_id, metrique_id, objet_id, operateur, avertissement, critique, actif) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (equipement_id, metrique_id, objet_id, operateur, avertissement, critique, int(actif)),
+        )
+
+
+def supprimer_seuils_equipement(equipement_id: int) -> None:
+    """Retire tous les seuils réglés sur un équipement (remise à zéro)."""
+    with get_connection() as connexion:
+        connexion.execute("DELETE FROM seuil WHERE equipement_id = ?", (equipement_id,))
+
+
+def supprimer_seuil(equipement_id: int, metrique_id: int | None, objet_id: int | None) -> None:
+    """Retire le seuil réglé : CPU, RAM et disque reviennent à leur valeur par défaut, les autres
+    services n'ont plus de seuil."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "DELETE FROM seuil WHERE equipement_id = ? AND COALESCE(metrique_id, 0) = ? AND COALESCE(objet_id, 0) = ?",
+            (equipement_id, metrique_id or 0, objet_id or 0),
+        )
+
+
+def metriques_ignorees(equipement_id: int) -> set[int]:
+    with get_connection() as connexion:
+        return {ligne[0] for ligne in connexion.execute(
+            "SELECT metrique_id FROM service_ignore WHERE equipement_id = ?", (equipement_id,))}
+
+
+def choisir_metriques_gardees(equipement_id: int, gardees: set[int]) -> None:
+    """Les services de mesure du modèle non cochés ne sont plus relevés (leur historique est gardé)."""
+    with get_connection() as connexion:
+        connexion.execute("DELETE FROM service_ignore WHERE equipement_id = ?", (equipement_id,))
+        connexion.executemany(
+            "INSERT INTO service_ignore (equipement_id, metrique_id) "
+            "SELECT ?, element_surveille.metrique_id FROM equipement JOIN element_surveille "
+            " ON element_surveille.modele_supervision_id = equipement.modele_supervision_id "
+            "WHERE equipement.id = ? AND element_surveille.metrique_id = ?",
+            [(equipement_id, equipement_id, m) for m in _metriques_du_modele(connexion, equipement_id) - gardees],
+        )
+
+
+def _metriques_du_modele(connexion: sqlite3.Connection, equipement_id: int) -> set[int]:
+    return {ligne[0] for ligne in connexion.execute(
+        "SELECT element_surveille.metrique_id FROM equipement JOIN element_surveille "
+        " ON element_surveille.modele_supervision_id = equipement.modele_supervision_id AND element_surveille.actif = 1 "
+        "WHERE equipement.id = ?", (equipement_id,))}
+
+
+def metriques_du_modele(equipement_id: int) -> list[sqlite3.Row]:
+    """Services de mesure du modèle de l'équipement, avec leur choix (gardé ou non)."""
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT seuils_config.metrique_id, metrique.code, metrique.libelle, "
-            "COALESCE(propre.valeur, seuils_config.valeur) AS valeur, "
-            "COALESCE(propre.valeur_critique, seuils_config.valeur_critique) AS valeur_critique, "
-            "propre.equipement_id IS NOT NULL AS personnalise "
-            "FROM equipement "
-            "JOIN element_surveille ON element_surveille.modele_supervision_id = equipement.modele_supervision_id "
+            "SELECT metrique.id AS metrique_id, metrique.code, metrique.libelle, metrique.par_interface, "
+            "NOT EXISTS (SELECT 1 FROM service_ignore WHERE service_ignore.equipement_id = equipement.id "
+            " AND service_ignore.metrique_id = metrique.id) AS garde "
+            "FROM equipement JOIN element_surveille ON element_surveille.modele_supervision_id = equipement.modele_supervision_id "
             " AND element_surveille.actif = 1 "
-            "JOIN seuils_config ON seuils_config.metrique_id = element_surveille.metrique_id "
-            "JOIN metrique ON metrique.id = seuils_config.metrique_id "
-            "LEFT JOIN seuil_equipement AS propre ON propre.equipement_id = equipement.id "
-            " AND propre.metrique_id = seuils_config.metrique_id "
-            "WHERE equipement.id = ? ORDER BY metrique.libelle",
+            "JOIN metrique ON metrique.id = element_surveille.metrique_id WHERE equipement.id = ? ORDER BY metrique.id",
             (equipement_id,),
         ).fetchall()
 
 
-def enregistrer_seuil_equipement(equipement_id: int, metrique_id: int, valeur: float,
-                                  valeur_critique: float) -> None:
-    """Crée ou met à jour le seuil propre à un équipement pour un service."""
+def deux_dernieres_mesures(equipement_id: int, metrique_id: int, interface_id: int) -> list[sqlite3.Row]:
+    """Les deux derniers relevés d'un compteur d'interface, du plus ancien au plus récent (débit)."""
     with get_connection() as connexion:
-        connexion.execute(
-            "INSERT INTO seuil_equipement (equipement_id, metrique_id, valeur, valeur_critique) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT (equipement_id, metrique_id) DO UPDATE SET "
-            "valeur = excluded.valeur, valeur_critique = excluded.valeur_critique",
-            (equipement_id, metrique_id, valeur, valeur_critique),
-        )
-
-
-def supprimer_seuil_equipement(equipement_id: int, metrique_id: int) -> None:
-    """Retire le seuil propre : le service revient au réglage global."""
-    with get_connection() as connexion:
-        connexion.execute(
-            "DELETE FROM seuil_equipement WHERE equipement_id = ? AND metrique_id = ?",
-            (equipement_id, metrique_id),
-        )
-
-
-def modifier_seuil(metrique_id: int, valeur: float, valeur_critique: float) -> bool:
-    """Met à jour les seuils globaux d'un service ; renvoie False s'il n'existe pas."""
-    with get_connection() as connexion:
-        curseur = connexion.execute(
-            "UPDATE seuils_config SET valeur = ?, valeur_critique = ? WHERE metrique_id = ?",
-            (valeur, valeur_critique, metrique_id),
-        )
-        return curseur.rowcount > 0
-
-
-def lister_criticites() -> list[sqlite3.Row]:
-    """Renvoie la criticité configurée pour les alertes qui ne dépendent pas d'un seuil."""
-    with get_connection() as connexion:
-        return connexion.execute("SELECT * FROM criticite_service ORDER BY libelle").fetchall()
-
-
-def modifier_criticite(code: str, criticite: str) -> bool:
-    """Change la criticité d'un type d'alerte, y compris pour ses alertes déjà actives."""
-    with get_connection() as connexion:
-        curseur = connexion.execute(
-            "UPDATE criticite_service SET criticite = ? WHERE code = ?", (criticite, code),
-        )
-        connexion.execute(
-            "UPDATE alerte SET criticite = ? WHERE code = ? AND statut = 'ACTIVE'", (criticite, code),
-        )
-        return curseur.rowcount > 0
+        lignes = connexion.execute(
+            "SELECT horodatage, valeur FROM mesure WHERE equipement_id = ? AND metrique_id = ? AND interface_id = ? "
+            "ORDER BY id DESC LIMIT 2", (equipement_id, metrique_id, interface_id),
+        ).fetchall()
+    return list(reversed(lignes))
 
 
 # ---------------------------------------------------------------- alertes
@@ -1003,7 +1354,8 @@ def _recalculer_correlation(connexion: sqlite3.Connection) -> None:
 
 
 def ouvrir_alerte(equipement_id: int, categorie: str, code: str, message: str,
-                   metrique_id: int | None = None, criticite: str | None = None) -> None:
+                   metrique_id: int | None = None, criticite: str | None = None, objet_id: int | None = None,
+                   interface_id: int | None = None) -> None:
     """Ouvre une alerte, ou actualise son message et sa criticité si elle est déjà active. Sans
     criticité fournie, c'est celle configurée pour ce type d'alerte qui s'applique."""
     with get_connection() as connexion:
@@ -1012,14 +1364,15 @@ def ouvrir_alerte(equipement_id: int, categorie: str, code: str, message: str,
                 "SELECT criticite FROM criticite_service WHERE code = ?", (code,)
             ).fetchone()["criticite"]
         connexion.execute(
-            "INSERT OR IGNORE INTO alerte (equipement_id, categorie, code, metrique_id, message, criticite) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (equipement_id, categorie, code, metrique_id, message, criticite),
+            "INSERT OR IGNORE INTO alerte (equipement_id, categorie, code, metrique_id, objet_id, interface_id, "
+            "message, criticite) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (equipement_id, categorie, code, metrique_id, objet_id, interface_id, message, criticite),
         )
         connexion.execute(
             "UPDATE alerte SET message = ?, criticite = ? WHERE equipement_id = ? AND code = ? "
-            "AND COALESCE(metrique_id, 0) = ? AND statut = 'ACTIVE'",
-            (message, criticite, equipement_id, code, metrique_id or 0),
+            "AND COALESCE(metrique_id, 0) = ? AND COALESCE(objet_id, 0) = ? AND COALESCE(interface_id, 0) = ? "
+            "AND statut = 'ACTIVE'",
+            (message, criticite, equipement_id, code, metrique_id or 0, objet_id or 0, interface_id or 0),
         )
         _recalculer_correlation(connexion)
 
@@ -1033,11 +1386,13 @@ def _cloturer(connexion: sqlite3.Connection, condition: str, parametres: tuple) 
     _recalculer_correlation(connexion)
 
 
-def cloturer_alerte(equipement_id: int, code: str, metrique_id: int | None = None) -> None:
+def cloturer_alerte(equipement_id: int, code: str, metrique_id: int | None = None,
+                    objet_id: int | None = None, interface_id: int | None = None) -> None:
     """Clôture une alerte active précise, si elle existe."""
     with get_connection() as connexion:
-        _cloturer(connexion, "equipement_id = ? AND code = ? AND COALESCE(metrique_id, 0) = ?",
-                  (equipement_id, code, metrique_id or 0))
+        _cloturer(connexion, "equipement_id = ? AND code = ? AND COALESCE(metrique_id, 0) = ? "
+                  "AND COALESCE(objet_id, 0) = ? AND COALESCE(interface_id, 0) = ?",
+                  (equipement_id, code, metrique_id or 0, objet_id or 0, interface_id or 0))
 
 
 def cloturer_alertes_sauf(equipement_id: int, code: str) -> None:
@@ -1081,12 +1436,24 @@ def lister_alertes(statut: str | None = None, equipement_id: int | None = None,
         ).fetchall()
 
 
-def lister_historique(categorie: str | None = None, recherche: str | None = None,
-                       limite: int = 300) -> list[sqlite3.Row]:
-    """Changements de statut et alertes, du plus récent au plus ancien, avec filtres optionnels :
-    catégorie (STATUT, AVERTISSEMENT ou CRITIQUE) et texte (équipement, adresse ou détail)."""
+CATEGORIES_LOGS = ("STATUT", "ERREUR", "AVERTISSEMENT", "CRITIQUE")
+
+
+def _requete_logs(equipement_id: int | None, depuis: str | None, jusqu_a: str | None,
+                  categorie: str | None, recherche: str | None) -> tuple[str, list]:
+    """Fil unifié des logs : changements de statut, erreurs de collecte et alertes (catégorie =
+    leur criticité), avec les filtres demandés. Renvoie (requête, paramètres)."""
     conditions, parametres = ["1 = 1"], []
-    if categorie:
+    if equipement_id is not None:
+        conditions.append("equipement_id = ?")
+        parametres.append(equipement_id)
+    if depuis:
+        conditions.append("horodatage >= ?")
+        parametres.append(depuis)
+    if jusqu_a:
+        conditions.append("horodatage <= ?")
+        parametres.append(jusqu_a)
+    if categorie in CATEGORIES_LOGS:
         conditions.append("categorie = ?")
         parametres.append(categorie)
     if recherche:
@@ -1096,15 +1463,35 @@ def lister_historique(categorie: str | None = None, recherche: str | None = None
             "(equipement_nom LIKE ? ESCAPE '\\' OR adresse LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\')"
         )
         parametres += [f"%{motif}%"] * 3
+    requete = (
+        "SELECT * FROM ("
+        " SELECT 'STATUT' AS categorie, c.horodatage, e.id AS equipement_id, e.nom AS equipement_nom, e.adresse, "
+        " c.ancien_statut || ' → ' || c.nouveau_statut AS detail, NULL AS date_fin "
+        " FROM changement_statut AS c JOIN equipement AS e ON e.id = c.equipement_id "
+        " UNION ALL "
+        " SELECT 'ERREUR', r.horodatage, e.id, e.nom, e.adresse, r.type_erreur || COALESCE(' : ' || r.message, ''), NULL "
+        " FROM erreur_collecte AS r JOIN equipement AS e ON e.id = r.equipement_id "
+        " UNION ALL "
+        " SELECT a.criticite, a.date_debut, e.id, e.nom, e.adresse, a.message, a.date_fin "
+        " FROM alerte AS a JOIN equipement AS e ON e.id = a.equipement_id"
+        f") WHERE {' AND '.join(conditions)}"
+    )
+    return requete, parametres
+
+
+def compter_logs(equipement_id: int | None = None, depuis: str | None = None, jusqu_a: str | None = None,
+                 categorie: str | None = None, recherche: str | None = None) -> int:
+    """Nombre de logs correspondant aux filtres (pour la pagination)."""
+    requete, parametres = _requete_logs(equipement_id, depuis, jusqu_a, categorie, recherche)
     with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT * FROM ("
-            " SELECT 'STATUT' AS categorie, c.horodatage, e.id AS equipement_id, e.nom AS equipement_nom, "
-            " e.adresse, c.ancien_statut || ' → ' || c.nouveau_statut AS detail, NULL AS date_fin "
-            " FROM changement_statut AS c JOIN equipement AS e ON e.id = c.equipement_id "
-            " UNION ALL "
-            " SELECT a.criticite, a.date_debut, e.id, e.nom, e.adresse, a.message, a.date_fin "
-            " FROM alerte AS a JOIN equipement AS e ON e.id = a.equipement_id"
-            f") WHERE {' AND '.join(conditions)} ORDER BY horodatage DESC LIMIT ?",
-            (*parametres, limite),
-        ).fetchall()
+        return connexion.execute(f"SELECT count(*) FROM ({requete})", parametres).fetchone()[0]
+
+
+def lister_logs(equipement_id: int | None = None, depuis: str | None = None, jusqu_a: str | None = None,
+                categorie: str | None = None, recherche: str | None = None, limite: int = 50,
+                decalage: int = 0) -> list[sqlite3.Row]:
+    """Logs du plus récent au plus ancien, filtrés et paginés."""
+    requete, parametres = _requete_logs(equipement_id, depuis, jusqu_a, categorie, recherche)
+    with get_connection() as connexion:
+        return connexion.execute(f"{requete} ORDER BY horodatage DESC LIMIT ? OFFSET ?",
+                                 (*parametres, limite, decalage)).fetchall()

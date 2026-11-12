@@ -17,6 +17,10 @@ SNMP_RETRIES = int(os.getenv("SNMP_RETRIES", "1"))
 # Base SQLite (dans Docker : /code/data, monté depuis le dossier local data/)
 DB_PATH = os.getenv("DB_PATH", "data/supervision.db")
 
+# Adresse contactée régulièrement pour savoir si le réseau du labo a accès à Internet : celle qui
+# fournit Chart.js, dont les graphiques ont besoin
+URL_TEST_INTERNET = os.getenv("URL_TEST_INTERNET", "https://cdn.jsdelivr.net")
+
 # Sessions de connexion : clé de signature du cookie. Sans SECRET_KEY, une clé
 # aléatoire est tirée à chaque démarrage (tout le monde est alors déconnecté).
 SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)

@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block titre %}Supervision SNMP{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ version_statique() }}">
 </head>
 <body>
@@ -13,13 +16,12 @@
       <nav class="navigation">
         <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
         <a href="/alertes" class="{{ 'actif' if page_active == 'alertes' }}">Alertes</a>
-        <a href="/historique" class="{{ 'actif' if page_active == 'historique' }}">Historique</a>
+        <a href="/logs" class="{{ 'actif' if page_active == 'logs' }}">Logs</a>
         {% if utilisateur.est_admin %}
           <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
         {% endif %}
       </nav>
     {% endif %}
-    <span class="version">v0.2 · collecte active</span>
     {% if utilisateur %}
       <div class="session">
         <span>{{ utilisateur.login }}</span>
@@ -31,7 +33,7 @@
     {% endif %}
   </header>
 
-  <main class="contenu">
+  <main class="contenu{{ ' contenu-large' if page_active }}">
     {% if erreur %}
       <p class="bandeau-erreur">{{ erreur }}</p>
     {% endif %}
