@@ -344,7 +344,9 @@
           <div><canvas id="graphique-objet-{{ g.id }}" data-objet="{{ g.id }}" data-nom="{{ g.nom }}"></canvas></div>
         {% endfor %}
       </div>
-      <p class="meta">Relevés toutes les 5 minutes.</p>
+      {% set intervalle = equipement.intervalle_polling or parametres.intervalle_polling_defaut %}
+      <p class="meta">Relevé toutes les {{ intervalle }} secondes
+        ({{ "polling propre à cet équipement" if equipement.intervalle_polling else "polling général" }}).</p>
       {% if utilisateur.est_admin %}
         <p class="actions-formulaire"><a href="/equipements/{{ equipement.id }}/services#objets" class="bouton-secondaire lien-bouton">Choisir les objets à garder</a></p>
       {% endif %}

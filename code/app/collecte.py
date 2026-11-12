@@ -49,8 +49,8 @@ PREFIXES_VIRTUELS = ("docker", "veth", "br-", "tap", "sit", "lo", "ovs-system")
 DISQUES_IGNORES = re.compile(r"^(/dev|/run|/sys|/proc|/snap|/boot|/var/lib/docker)(/|$)|/@docker(/|$)")
 VOLUME_NAS = re.compile(r"^(/volume\d+|/share/[^/]+)$")  # sur un NAS, seuls les volumes de données comptent
 
-# Objets détectés : leur relevé parcourt des tables entières, donc moins souvent que la collecte
-PERIODE_OBJETS = 300            # secondes
+# Objets détectés : leur relevé parcourt des tables entières. Il suit le polling de l'équipement
+# (le sien, sinon le général), mais jamais plus de MAX_RELEVES_SIMULTANES à la fois.
 MAX_RELEVES_SIMULTANES = 3
 MAX_ECHECS_CONSECUTIFS = 3      # l'équipement ne répond plus : inutile d'attendre sur chaque MIB
 # Les objets sont relevés en arrière-plan : on peut attendre davantage qu'à la collecte. Un NAS dont les
@@ -71,9 +71,12 @@ PERIODE_VERIFICATION = 5   # secondes
 _planificateur: AsyncIOScheduler | None = None
 # Échéances gardées en mémoire : derniere_collecte n'est mise à jour qu'en cas de réussite, elle
 # ferait réinterroger un équipement en panne à chaque vérification au lieu de suivre son intervalle.
-# Clé (id équipement, id métrique) pour un service ; (id équipement, None) pour l'équipement lui-même.
-_prochaine_collecte: dict[tuple[int, int | None], float] = {}
+# Clé (id équipement, id métrique) pour un service ; (id équipement, None) pour l'équipement lui-même ;
+# (id équipement, "objets") pour le relevé de ses objets détectés.
+_prochaine_collecte: dict[tuple[int, int | str | None], float] = {}
 _en_cours: dict[int, asyncio.Task] = {}      # id équipement -> collecte en cours
+_objets_en_cours: set[int] = set()           # équipements dont les objets sont en cours de relevé
+_limite_objets = asyncio.Semaphore(MAX_RELEVES_SIMULTANES)
 
 
 def demarrer() -> None:
@@ -85,7 +88,9 @@ def demarrer() -> None:
     )
     _planificateur.add_job(db.purger_donnees_anciennes, "interval", hours=24)
     _planificateur.add_job(internet.verifier_internet, "interval", minutes=5)
-    _planificateur.add_job(relever_objets, "interval", seconds=PERIODE_OBJETS, max_instances=1, coalesce=True)
+    _planificateur.add_job(
+        verifier_echeances_objets, "interval", seconds=PERIODE_VERIFICATION, max_instances=1, coalesce=True,
+    )
     _planificateur.start()
     a_identifier = db.equipements_a_identifier()
     if a_identifier:
@@ -544,27 +549,38 @@ async def _detecter_en_fond(equipement_id: int | None) -> None:
                 logger.exception("Détection impossible sur %s", equipement["nom"])
 
 
-async def relever_objets() -> None:
-    """Actualise régulièrement les objets détectés, plusieurs équipements à la fois."""
-    limite = asyncio.Semaphore(MAX_RELEVES_SIMULTANES)
-
+async def verifier_echeances_objets() -> None:
+    """Relève les objets détectés des équipements dont l'intervalle de polling est écoulé (celui de
+    l'équipement, sinon le général), donc au même rythme que leurs graphiques de mesures. Tout le
+    parc est concerné, pas seulement les équipements déjà détectés : celui qui était injoignable à
+    son ajout est détecté dès qu'il répond."""
+    parametres = db.obtenir_parametres_generaux()
+    maintenant = time.monotonic()
     a_identifier = set(db.equipements_a_identifier())
+    for equipement in db.lister_equipements_actifs():
+        id_equipement = equipement["id"]
+        if id_equipement in _objets_en_cours or equipement["statut"] == "INDISPONIBLE":
+            continue
+        cle = (id_equipement, "objets")
+        if maintenant < _prochaine_collecte.get(cle, 0):
+            continue
+        _prochaine_collecte[cle] = maintenant + (equipement["intervalle_polling"] or parametres["intervalle_polling_defaut"])
+        _objets_en_cours.add(id_equipement)
+        tache = asyncio.create_task(_relever_objets_equipement(equipement, id_equipement in a_identifier))
+        tache.add_done_callback(lambda _, cle=id_equipement: _objets_en_cours.discard(cle))
 
-    async def relever(equipement) -> None:
-        async with limite:
-            try:
-                if equipement["id"] in a_identifier:  # injoignable lors d'une identification précédente
-                    await identifier_equipement(equipement["id"])
-                else:
-                    async with verrou(equipement["id"]):
-                        await detecter_objets(equipement)
-            except Exception:
+
+async def _relever_objets_equipement(equipement, a_identifier: bool) -> None:
+    async with _limite_objets:
+        try:
+            if a_identifier:  # injoignable lors d'une identification précédente
+                await identifier_equipement(equipement["id"])
+            else:
+                async with verrou(equipement["id"]):
+                    await detecter_objets(equipement)
+        except Exception:
+            if db.obtenir_equipement(equipement["id"]) is not None:
                 logger.exception("Relevé des objets impossible sur %s", equipement["nom"])
-
-    # Tout le parc, pas seulement les équipements déjà détectés : celui qui était injoignable à son
-    # ajout est ainsi détecté dès qu'il répond.
-    equipements = [e for e in db.lister_equipements_actifs() if e["statut"] != "INDISPONIBLE"]
-    await asyncio.gather(*(relever(equipement) for equipement in equipements))
 
 
 async def collecter_equipement(equipement: dict, services: set[int] | None = None) -> None:
