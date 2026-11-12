@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS equipement (
     intervalle_polling      INTEGER,                -- NULL = valeur globale (parametres_generaux)
     nb_echecs_alerte        INTEGER,                -- NULL = valeur globale
     duree_conservation      INTEGER,                -- en jours, NULL = valeur globale
+    duree_conservation_agregee INTEGER,             -- données agrégées, en jours, NULL = valeur globale
     actif                   INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     statut                  TEXT NOT NULL DEFAULT 'EN_ATTENTE'
                                 CHECK (statut IN ('EN_ATTENTE', 'OPERATIONNEL', 'DEGRADE', 'INDISPONIBLE')),
@@ -252,6 +253,41 @@ CREATE TABLE IF NOT EXISTS mesure_objet (
 );
 CREATE INDEX IF NOT EXISTS idx_mesure_objet ON mesure_objet (objet_id, horodatage);
 
+-- Moyennes par heure des mesures dont le détail a été purgé (durée : conservation agrégée).
+-- interface_id vaut 0 quand la mesure ne concerne pas une interface. Pour un compteur d'octets,
+-- le maximum de l'heure est le dernier relevé : le débit se recalcule entre deux heures.
+CREATE TABLE IF NOT EXISTS mesure_agregee (
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    metrique_id   INTEGER NOT NULL REFERENCES metrique(id),
+    interface_id  INTEGER NOT NULL DEFAULT 0,
+    heure         TEXT NOT NULL,
+    moyenne       REAL NOT NULL,
+    minimum       REAL NOT NULL,
+    maximum       REAL NOT NULL,
+    utilise       REAL,
+    total         REAL,
+    nb            INTEGER NOT NULL,
+    PRIMARY KEY (equipement_id, metrique_id, interface_id, heure)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS volume_agrege (
+    equipement_id INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,
+    nom           TEXT NOT NULL,
+    heure         TEXT NOT NULL,
+    moyenne       REAL NOT NULL,
+    utilise       REAL,
+    total         REAL,
+    PRIMARY KEY (equipement_id, nom, heure)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS objet_agrege (
+    objet_id INTEGER NOT NULL REFERENCES objet_detecte(id) ON DELETE CASCADE,
+    instance TEXT NOT NULL,
+    heure    TEXT NOT NULL,
+    moyenne  REAL NOT NULL,
+    PRIMARY KEY (objet_id, instance, heure)
+) WITHOUT ROWID;
+
 -- Criticité des alertes qui ne dépendent pas d'un seuil.
 CREATE TABLE IF NOT EXISTS criticite_service (
     code      TEXT PRIMARY KEY,
@@ -356,6 +392,7 @@ def _migrer(connexion: sqlite3.Connection) -> None:
         ("equipement", "sys_object_id", "TEXT"),
         ("equipement", "nb_echecs_alerte", "INTEGER"),
         ("equipement", "duree_conservation", "INTEGER"),
+        ("equipement", "duree_conservation_agregee", "INTEGER"),
         ("element_surveille", "methode", "TEXT"),
         ("element_surveille", "oid_secondaire", "TEXT"),
         ("equipement", "identification_requise", "INTEGER NOT NULL DEFAULT 0"),
@@ -568,7 +605,7 @@ def creer_equipement(nom: str, adresse: str, communaute_snmp: str,
         return curseur.lastrowid
 
 
-REGLAGES_EQUIPEMENT = ("intervalle_polling", "nb_echecs_alerte", "duree_conservation")
+REGLAGES_EQUIPEMENT = ("intervalle_polling", "nb_echecs_alerte", "duree_conservation", "duree_conservation_agregee")
 
 
 def modifier_reglage_equipement(id_equipement: int, champ: str, valeur: int | None) -> None:
@@ -595,13 +632,15 @@ def services_de_l_equipement(equipement_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def modifier_parametres(intervalle_polling: int, nb_echecs: int, duree_conservation: int) -> None:
+def modifier_parametres(intervalle_polling: int, nb_echecs: int, duree_conservation: int,
+                        duree_conservation_agregee: int) -> None:
     """Met à jour les réglages globaux de collecte et de conservation."""
     with get_connection() as connexion:
         connexion.execute(
             "UPDATE parametres_generaux SET intervalle_polling_defaut = ?, "
-            "nb_echecs_avant_indisponibilite = ?, duree_conservation_detail = ? WHERE id = 1",
-            (intervalle_polling, nb_echecs, duree_conservation),
+            "nb_echecs_avant_indisponibilite = ?, duree_conservation_detail = ?, "
+            "duree_conservation_agregee = ? WHERE id = 1",
+            (intervalle_polling, nb_echecs, duree_conservation, duree_conservation_agregee),
         )
 
 
@@ -609,31 +648,70 @@ def compter_reglages_propres() -> dict[str, int]:
     """Nombre d'équipements qui ont leur propre réglage, pour chaque réglage de collecte."""
     with get_connection() as connexion:
         return {champ: connexion.execute(f"SELECT count(*) FROM equipement WHERE {champ} IS NOT NULL").fetchone()[0]
-                for champ in ("intervalle_polling", "nb_echecs_alerte", "duree_conservation")}
+                for champ in REGLAGES_EQUIPEMENT}
+
+
+HEURE = "strftime('%Y-%m-%dT%H:00:00', horodatage)"
+DEBUT_HEURE = "strftime('%Y-%m-%dT%H:00:00', 'now', '-' || ? || ' days')"
+
+
+def _agreger_avant_purge(connexion: sqlite3.Connection, equipement_id: int, duree: int) -> None:
+    """Remplace le détail de plus de `duree` jours par ses moyennes par heure. Seules les heures
+    entières sont agrégées (le détail est donc gardé jusqu'à une heure de plus), et l'insertion
+    ignore une heure déjà agrégée : rejouée après une interruption, la purge ne fausse rien."""
+    connexion.execute(
+        "INSERT OR IGNORE INTO mesure_agregee (equipement_id, metrique_id, interface_id, heure, moyenne, "
+        "minimum, maximum, utilise, total, nb) "
+        f"SELECT equipement_id, metrique_id, COALESCE(interface_id, 0), {HEURE}, AVG(valeur), MIN(valeur), "
+        "MAX(valeur), AVG(utilise), AVG(total), COUNT(valeur) FROM mesure "
+        f"WHERE equipement_id = ? AND valeur IS NOT NULL AND horodatage < {DEBUT_HEURE} "
+        "GROUP BY 1, 2, 3, 4", (equipement_id, duree))
+    connexion.execute(
+        "INSERT OR IGNORE INTO volume_agrege (equipement_id, nom, heure, moyenne, utilise, total) "
+        f"SELECT equipement_id, nom, {HEURE}, AVG(valeur), AVG(utilise), AVG(total) FROM mesure_volume "
+        f"WHERE equipement_id = ? AND horodatage < {DEBUT_HEURE} GROUP BY 1, 2, 3", (equipement_id, duree))
+    connexion.execute(
+        "INSERT OR IGNORE INTO objet_agrege (objet_id, instance, heure, moyenne) "
+        f"SELECT objet_id, instance, {HEURE}, AVG(valeur) FROM mesure_objet "
+        "WHERE objet_id IN (SELECT id FROM objet_detecte WHERE equipement_id = ?) "
+        f"AND horodatage < {DEBUT_HEURE} GROUP BY 1, 2, 3", (equipement_id, duree))
 
 
 def purger_donnees_anciennes() -> int:
-    """Supprime mesures, erreurs, changements de statut et alertes clôturées plus anciens que la
-    durée de conservation de chaque équipement (la sienne, sinon la globale). Une alerte encore
-    active n'est jamais supprimée. Renvoie le nombre de lignes supprimées."""
+    """Agrège puis supprime les mesures plus anciennes que la durée de conservation du détail de
+    chaque équipement (la sienne, sinon la globale) ; supprime les moyennes plus anciennes que sa
+    durée de conservation agrégée ; supprime aussi erreurs, changements de statut et alertes
+    clôturées de plus de la durée du détail. Une alerte encore active n'est jamais supprimée.
+    Agrégation et suppression se font dans la même transaction : tout ou rien. Renvoie le nombre
+    de lignes de détail supprimées."""
     limite = "strftime('%Y-%m-%dT%H:%M:%S', 'now', '-' || ? || ' days')"
     total = 0
     with get_connection() as connexion:
         defaut = connexion.execute(
-            "SELECT duree_conservation_detail FROM parametres_generaux WHERE id = 1"
-        ).fetchone()[0]
-        for equipement in connexion.execute("SELECT id, duree_conservation FROM equipement").fetchall():
-            duree = equipement["duree_conservation"] or defaut
+            "SELECT duree_conservation_detail, duree_conservation_agregee FROM parametres_generaux WHERE id = 1"
+        ).fetchone()
+        for equipement in connexion.execute(
+                "SELECT id, duree_conservation, duree_conservation_agregee FROM equipement").fetchall():
+            duree = equipement["duree_conservation"] or defaut[0]
+            duree_agregee = equipement["duree_conservation_agregee"] or defaut[1]
+            _agreger_avant_purge(connexion, equipement["id"], duree)
             for requete in (
-                f"DELETE FROM mesure WHERE equipement_id = ? AND horodatage < {limite}",
-                f"DELETE FROM mesure_volume WHERE equipement_id = ? AND horodatage < {limite}",
+                f"DELETE FROM mesure WHERE equipement_id = ? AND horodatage < {DEBUT_HEURE}",
+                f"DELETE FROM mesure_volume WHERE equipement_id = ? AND horodatage < {DEBUT_HEURE}",
                 "DELETE FROM mesure_objet WHERE objet_id IN (SELECT id FROM objet_detecte WHERE equipement_id = ?) "
-                f"AND horodatage < {limite}",
+                f"AND horodatage < {DEBUT_HEURE}",
                 f"DELETE FROM erreur_collecte WHERE equipement_id = ? AND horodatage < {limite}",
                 f"DELETE FROM changement_statut WHERE equipement_id = ? AND horodatage < {limite}",
                 f"DELETE FROM alerte WHERE equipement_id = ? AND statut = 'CLOTUREE' AND date_fin < {limite}",
             ):
                 total += connexion.execute(requete, (equipement["id"], duree)).rowcount
+            for requete in (
+                f"DELETE FROM mesure_agregee WHERE equipement_id = ? AND heure < {limite}",
+                f"DELETE FROM volume_agrege WHERE equipement_id = ? AND heure < {limite}",
+                "DELETE FROM objet_agrege WHERE objet_id IN (SELECT id FROM objet_detecte WHERE equipement_id = ?) "
+                f"AND heure < {limite}",
+            ):
+                connexion.execute(requete, (equipement["id"], duree_agregee))
     return total
 
 
@@ -757,27 +835,46 @@ def lister_erreurs_collecte(equipement_id: int, limite: int = 20) -> list[sqlite
 
 
 def lister_mesures(equipement_id: int, code_metrique: str, interface_id: int | None = None,
-                    depuis: str | None = None, jusqu_a: str | None = None) -> list[sqlite3.Row]:
+                    depuis: str | None = None, jusqu_a: str | None = None,
+                    agrege: bool = False) -> list[sqlite3.Row]:
     """Mesures d'un équipement pour une métrique donnée (et, si fournie, une interface
-    donnée), triées par horodatage croissant."""
+    donnée), triées par horodatage croissant. Avec `agrege`, les moyennes par heure du détail
+    déjà purgé sont placées avant les mesures détaillées (pour un compteur d'octets, le dernier
+    relevé de l'heure)."""
     condition = "mesure.equipement_id = ? AND metrique.code = ?"
     parametres: list = [equipement_id, code_metrique]
+    condition_agregat = "a.equipement_id = ? AND metrique.code = ?"
+    parametres_agregat: list = [equipement_id, code_metrique]
     if interface_id is not None:
         condition += " AND mesure.interface_id = ?"
         parametres.append(interface_id)
+        condition_agregat += " AND a.interface_id = ?"
+        parametres_agregat.append(interface_id)
     if depuis:
         condition += " AND mesure.horodatage >= ?"
         parametres.append(depuis)
+        condition_agregat += " AND a.heure >= ?"
+        parametres_agregat.append(depuis)
     if jusqu_a:
         condition += " AND mesure.horodatage <= ?"
         parametres.append(jusqu_a)
+        condition_agregat += " AND a.heure <= ?"
+        parametres_agregat.append(jusqu_a)
     with get_connection() as connexion:
-        return connexion.execute(
+        anciennes = connexion.execute(
+            "SELECT a.heure AS horodatage, "
+            "CASE WHEN metrique.type_valeur = 'COMPTEUR' THEN a.maximum ELSE a.moyenne END AS valeur, "
+            "NULLIF(a.interface_id, 0) AS interface_id, a.utilise, a.total, NULL AS detail "
+            "FROM mesure_agregee a JOIN metrique ON metrique.id = a.metrique_id "
+            f"WHERE {condition_agregat} ORDER BY a.heure", parametres_agregat,
+        ).fetchall() if agrege else []
+        recentes = connexion.execute(
             "SELECT mesure.horodatage, mesure.valeur, mesure.interface_id, mesure.utilise, mesure.total, mesure.detail "
             "FROM mesure JOIN metrique ON metrique.id = mesure.metrique_id "
             f"WHERE {condition} ORDER BY mesure.horodatage",
             parametres,
         ).fetchall()
+    return anciennes + recentes
 
 
 def trouver_equipement(recherche: str, exact: bool = False) -> sqlite3.Row | None:
@@ -981,14 +1078,18 @@ def lister_valeurs_objets(equipement_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def lister_mesures_objet(equipement_id: int, objet_id: int) -> list[sqlite3.Row]:
+def lister_mesures_objet(equipement_id: int, objet_id: int, agrege: bool = False) -> list[sqlite3.Row]:
+    requete = ("SELECT mesure_objet.instance, mesure_objet.horodatage, mesure_objet.valeur FROM mesure_objet "
+               "JOIN objet_detecte ON objet_detecte.id = mesure_objet.objet_id "
+               "WHERE mesure_objet.objet_id = ? AND objet_detecte.equipement_id = ?")
+    parametres: tuple = (objet_id, equipement_id)
+    if agrege:
+        requete = ("SELECT a.instance, a.heure AS horodatage, a.moyenne AS valeur FROM objet_agrege a "
+                   "JOIN objet_detecte ON objet_detecte.id = a.objet_id "
+                   "WHERE a.objet_id = ? AND objet_detecte.equipement_id = ? UNION ALL " + requete)
+        parametres = parametres + parametres
     with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT mesure_objet.instance, mesure_objet.horodatage, mesure_objet.valeur FROM mesure_objet "
-            "JOIN objet_detecte ON objet_detecte.id = mesure_objet.objet_id "
-            "WHERE mesure_objet.objet_id = ? AND objet_detecte.equipement_id = ? "
-            "ORDER BY mesure_objet.horodatage", (objet_id, equipement_id),
-        ).fetchall()
+        return connexion.execute(requete + " ORDER BY horodatage", parametres).fetchall()
 
 
 # ---------------------------------------------------------------- groupes
@@ -1066,7 +1167,8 @@ def enregistrer_volumes(equipement_id: int, volumes: list[tuple]) -> None:
         )
 
 
-def lister_volumes(equipement_id: int, depuis: str | None = None, jusqu_a: str | None = None) -> list[sqlite3.Row]:
+def lister_volumes(equipement_id: int, depuis: str | None = None, jusqu_a: str | None = None,
+                   agrege: bool = False) -> list[sqlite3.Row]:
     condition, parametres = "equipement_id = ?", [equipement_id]
     if depuis:
         condition += " AND horodatage >= ?"
@@ -1074,11 +1176,13 @@ def lister_volumes(equipement_id: int, depuis: str | None = None, jusqu_a: str |
     if jusqu_a:
         condition += " AND horodatage <= ?"
         parametres.append(jusqu_a)
+    requete = (f"SELECT nom, horodatage, valeur, utilise, total FROM mesure_volume WHERE {condition}")
+    if agrege:
+        requete = ("SELECT nom, heure AS horodatage, moyenne AS valeur, utilise, total FROM volume_agrege "
+                   f"WHERE {condition.replace('horodatage', 'heure')} UNION ALL " + requete)
+        parametres = parametres + parametres
     with get_connection() as connexion:
-        return connexion.execute(
-            f"SELECT nom, horodatage, valeur, utilise, total FROM mesure_volume WHERE {condition} "
-            "ORDER BY horodatage, nom", parametres,
-        ).fetchall()
+        return connexion.execute(requete + " ORDER BY horodatage, nom", parametres).fetchall()
 
 
 def derniers_volumes(equipement_id: int) -> list[sqlite3.Row]:

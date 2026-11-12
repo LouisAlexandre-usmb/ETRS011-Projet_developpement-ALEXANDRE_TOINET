@@ -228,6 +228,14 @@
 
   <details class="carte" id="mesures" open>
     <summary><h2>Mesures</h2></summary>
+    <p class="meta">
+      <label>Période :
+        <select id="periode-historique">
+          <option value="detail">Détail récent</option>
+          <option value="agrege">Historique agrégé (moyennes par heure)</option>
+        </select>
+      </label>
+    </p>
     <div class="graphiques">
       {% if 'cpu' in codes_actifs %}<div><canvas id="graphique-cpu"></canvas></div>{% endif %}
       {% for code in ('ram', 'disque') if code in codes_actifs %}
@@ -413,16 +421,25 @@
   const idEquipement = {{ equipement.id }};
   const graphiques = {};
 
+  // « Historique agrégé » : ajoute aux graphiques les moyennes par heure du détail déjà purgé
+  let historiqueAgrege = false;
+  function suffixeAgrege() { return historiqueAgrege ? "&agrege=1" : ""; }
+  function libelleHeure(horodatage) {
+    const date = new Date(horodatage + "Z");
+    return historiqueAgrege ? date.toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+                            : date.toLocaleTimeString();
+  }
+
   async function chargerSerie(metrique, interfaceId) {
     const params = new URLSearchParams({ metrique });
     if (interfaceId) params.set("interface_id", interfaceId);
-    const reponse = await fetch(`/api/equipements/${idEquipement}/mesures?${params}`);
+    const reponse = await fetch(`/api/equipements/${idEquipement}/mesures?${params}${suffixeAgrege()}`);
     return reponse.ok ? reponse.json() : [];
   }
 
   async function chargerDebit(metrique, interfaceId) {
     const params = new URLSearchParams({ metrique, interface_id: interfaceId });
-    const reponse = await fetch(`/api/equipements/${idEquipement}/debit?${params}`);
+    const reponse = await fetch(`/api/equipements/${idEquipement}/debit?${params}${suffixeAgrege()}`);
     return reponse.ok ? reponse.json() : [];
   }
 
@@ -442,7 +459,7 @@
   }
 
   function dessinerGraphique(canvasId, mesures, libelle, diviseur = 1) {
-    const etiquettes = mesures.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
+    const etiquettes = mesures.map((m) => libelleHeure(m.horodatage));
     const valeurs = mesures.map((m) => (m.valeur === null ? null : m.valeur / diviseur));
     const zoneDetail = document.getElementById(canvasId.replace("graphique-", "detail-graphique-"));
     if (graphiques[canvasId]) graphiques[canvasId].destroy();
@@ -475,7 +492,7 @@
     graphiques[canvasId] = new Chart(document.getElementById(canvasId), {
       type: "line",
       data: {
-        labels: instants.map((h) => new Date(h + "Z").toLocaleTimeString()),
+        labels: instants.map((h) => libelleHeure(h)),
         datasets: noms.map((nom, rang) => ({
           label: `${nom} (%)`, data: instants.map((h) => parVolume[nom][h]?.valeur ?? null),
           ...CHARTE.serie(rang, noms.length === 1), spanGaps: false,
@@ -506,7 +523,7 @@
     }
     if (document.getElementById("graphique-disque")) {
       // Une courbe par volume quand ils sont connus ; sinon, l'historique du seul volume le plus rempli
-      const reponse = await fetch(`/api/equipements/${idEquipement}/volumes`);
+      const reponse = await fetch(`/api/equipements/${idEquipement}/volumes?${suffixeAgrege().slice(1)}`);
       const volumes = reponse.ok ? await reponse.json() : {};
       if (Object.keys(volumes).length) dessinerVolumes("graphique-disque", volumes);
       else dessinerGraphique("graphique-disque", await chargerSerie("disque"), "Capacité disque (%)");
@@ -521,7 +538,7 @@
       chargerDebit("if_out_octets", selecteur.value),
     ]);
     const enMbps = (m) => (m.valeur === null ? null : m.valeur / 1000000);
-    const etiquettes = entrant.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString());
+    const etiquettes = entrant.map((m) => libelleHeure(m.horodatage));
     if (graphiques["graphique-trafic"]) graphiques["graphique-trafic"].destroy();
     graphiques["graphique-trafic"] = new Chart(document.getElementById("graphique-trafic"), {
       type: "line",
@@ -545,13 +562,13 @@
   async function dessinerObjets() {
     for (const canvas of document.querySelectorAll("canvas[data-objet]")) {
       if (graphiques[canvas.id]) continue;
-      const reponse = await fetch(`/api/equipements/${idEquipement}/objets/${canvas.dataset.objet}/mesures`);
+      const reponse = await fetch(`/api/equipements/${idEquipement}/objets/${canvas.dataset.objet}/mesures?${suffixeAgrege().slice(1)}`);
       const series = reponse.ok ? await reponse.json() : {};
       const premiere = Object.values(series)[0] || [];
       graphiques[canvas.id] = new Chart(canvas, {
         type: "line",
         data: {
-          labels: premiere.map((m) => new Date(m.horodatage + "Z").toLocaleTimeString()),
+          labels: premiere.map((m) => libelleHeure(m.horodatage)),
           datasets: Object.entries(series).map(([instance, mesures], rang) => ({
             label: `${canvas.dataset.nom} ${instance}`, data: mesures.map((m) => m.valeur),
             ...CHARTE.serie(rang, Object.keys(series).length === 1), spanGaps: false,
@@ -602,5 +619,15 @@
   rafraichirCpuRamUptime();
   rafraichirTrafic();
   document.getElementById("selecteur-interface")?.addEventListener("change", rafraichirTrafic);
+  document.getElementById("periode-historique")?.addEventListener("change", (evenement) => {
+    historiqueAgrege = evenement.target.value === "agrege";
+    for (const canvas of document.querySelectorAll("canvas[data-objet]")) {
+      graphiques[canvas.id]?.destroy();
+      delete graphiques[canvas.id];
+    }
+    rafraichirCpuRamUptime();
+    rafraichirTrafic();
+    if (blocObjets && blocObjets.open) dessinerObjets();
+  });
 </script>
 {% endblock %}

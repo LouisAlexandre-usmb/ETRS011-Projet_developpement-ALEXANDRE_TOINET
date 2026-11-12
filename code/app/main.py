@@ -128,7 +128,8 @@ class SeuilEquipement(BaseModel):
 REGLAGES = {
     "intervalle_polling": ("Intervalle de polling (secondes)", "intervalle_polling_defaut", 5, 86400),
     "nb_echecs_alerte": ("Échecs consécutifs avant alerte", "nb_echecs_avant_indisponibilite", 1, 100),
-    "duree_conservation": ("Conservation des données (jours)", "duree_conservation_detail", 1, 3650),
+    "duree_conservation": ("Conservation des données détaillées (jours)", "duree_conservation_detail", 1, 3650),
+    "duree_conservation_agregee": ("Conservation des données agrégées (jours)", "duree_conservation_agregee", 1, 3650),
 }
 
 
@@ -480,15 +481,17 @@ async def modifier_reglage_equipement_html(id_equipement: int, admin: Admin, cha
 
 @app.post("/parametres")
 async def modifier_parametres_html(admin: Admin, intervalle_polling: str = Form(""),
-                                    nb_echecs_alerte: str = Form(""), duree_conservation: str = Form("")):
+                                    nb_echecs_alerte: str = Form(""), duree_conservation: str = Form(""),
+                                    duree_conservation_agregee: str = Form("")):
     """Enregistre les réglages globaux de collecte et de conservation."""
     saisies = {"intervalle_polling": intervalle_polling, "nb_echecs_alerte": nb_echecs_alerte,
-               "duree_conservation": duree_conservation}
+               "duree_conservation": duree_conservation, "duree_conservation_agregee": duree_conservation_agregee}
     valeurs = {champ: _entier_borne(texte, champ) for champ, texte in saisies.items()}
     for champ, valeur in valeurs.items():
         if valeur is None:
             return RedirectResponse(f"/alertes?erreur={quote(_message_bornes(champ))}#parametres", status_code=303)
-    db.modifier_parametres(valeurs["intervalle_polling"], valeurs["nb_echecs_alerte"], valeurs["duree_conservation"])
+    db.modifier_parametres(valeurs["intervalle_polling"], valeurs["nb_echecs_alerte"], valeurs["duree_conservation"],
+                           valeurs["duree_conservation_agregee"])
     collecte.oublier_echeances()
     return RedirectResponse("/alertes#parametres", status_code=303)
 
@@ -763,23 +766,26 @@ async def lister_equipements_api(utilisateur: Connecte):
 @app.get("/api/equipements/{id_equipement}/mesures")
 async def mesures_equipement_api(id_equipement: int, metrique: str, utilisateur: Connecte,
                                   interface_id: int | None = None,
-                                  depuis: str | None = None, jusqu_a: str | None = None):
+                                  depuis: str | None = None, jusqu_a: str | None = None,
+                                  agrege: bool = False):
     """Historique des relevés d'une métrique pour un équipement (et, si fournie, une
-    interface). Query params : metrique (code, ex. "cpu"), interface_id, depuis, jusqu_a."""
+    interface). Query params : metrique (code, ex. "cpu"), interface_id, depuis, jusqu_a, agrege
+    (ajoute les moyennes par heure du détail déjà purgé)."""
     if db.obtenir_equipement(id_equipement) is None:
         return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
-    mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a)
+    mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a, agrege)
     return [dict(ligne) for ligne in mesures]
 
 
 @app.get("/api/equipements/{id_equipement}/volumes")
 async def volumes_equipement_api(id_equipement: int, utilisateur: Connecte,
-                                 depuis: str | None = None, jusqu_a: str | None = None):
+                                 depuis: str | None = None, jusqu_a: str | None = None,
+                                 agrege: bool = False):
     """Historique de chaque volume disque : {nom: [{horodatage, valeur, utilise, total}]}."""
     if db.obtenir_equipement(id_equipement) is None:
         return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
     series: dict[str, list[dict]] = {}
-    for ligne in db.lister_volumes(id_equipement, depuis, jusqu_a):
+    for ligne in db.lister_volumes(id_equipement, depuis, jusqu_a, agrege):
         series.setdefault(ligne["nom"], []).append(
             {"horodatage": ligne["horodatage"], "valeur": ligne["valeur"], "utilise": ligne["utilise"], "total": ligne["total"]})
     return series
@@ -788,20 +794,21 @@ async def volumes_equipement_api(id_equipement: int, utilisateur: Connecte,
 @app.get("/api/equipements/{id_equipement}/debit")
 async def debit_equipement_api(id_equipement: int, metrique: Literal["if_in_octets", "if_out_octets"],
                                 interface_id: int, utilisateur: Connecte,
-                                depuis: str | None = None, jusqu_a: str | None = None):
+                                depuis: str | None = None, jusqu_a: str | None = None,
+                                agrege: bool = False):
     """Débit d'une interface en bits/s, calculé à partir des relevés bruts de ses compteurs."""
     interface = next((itf for itf in db.lister_interfaces(id_equipement) if itf["id"] == interface_id), None)
     if interface is None:
         return JSONResponse(status_code=404, content={"erreur": "Interface introuvable"})
-    mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a)
+    mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a, agrege)
     return metriques.calculer_debit(mesures, interface["vitesse"])
 
 
 @app.get("/api/equipements/{id_equipement}/objets/{objet_id}/mesures")
-async def mesures_objet_api(id_equipement: int, objet_id: int, utilisateur: Connecte):
+async def mesures_objet_api(id_equipement: int, objet_id: int, utilisateur: Connecte, agrege: bool = False):
     """Historique d'un objet détecté, par instance, pour ses graphiques."""
     series: dict[str, list[dict]] = {}
-    for ligne in db.lister_mesures_objet(id_equipement, objet_id):
+    for ligne in db.lister_mesures_objet(id_equipement, objet_id, agrege):
         series.setdefault(ligne["instance"], []).append({"horodatage": ligne["horodatage"], "valeur": ligne["valeur"]})
     return series
 
