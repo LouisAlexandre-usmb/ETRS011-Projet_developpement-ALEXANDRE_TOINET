@@ -16,6 +16,16 @@ OID_IF_SPEED = "1.3.6.1.2.1.2.2.1.5"
 OID_IF_HIGH_SPEED = "1.3.6.1.2.1.31.1.1.1.15"  # ifHighSpeed (ifXTable), en Mb/s, sans le
                                                 # plafond 32 bits (~4295 Mb/s) d'ifSpeed
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"
+# ifHCInOctets/ifHCOutOctets (ifXTable, 64 bits) : contrairement à ifInOctets/ifOutOctets
+# (ifTable, 32 bits, configurés dans element_surveille), ils ne débordent pas en pratique —
+# un compteur 32 bits revient à zéro en quelques dizaines de secondes sur un lien à 1 Gb/s
+# pleinement chargé. Même logique de préférence que pour ifHighSpeed ci-dessous : on les
+# utilise dès qu'ils répondent, repli sur l'OID 32 bits configuré sinon (équipement qui ne
+# supporte pas ifXTable).
+OID_IF_HC_COMPTEURS = {
+    "if_in_octets": "1.3.6.1.2.1.31.1.1.1.6",
+    "if_out_octets": "1.3.6.1.2.1.31.1.1.1.10",
+}
 OID_HR_STORAGE_TYPE = "1.3.6.1.2.1.25.2.3.1.2"
 OID_HR_STORAGE_DESCR = "1.3.6.1.2.1.25.2.3.1.3"
 OID_HR_STORAGE_ALLOC_UNITS = "1.3.6.1.2.1.25.2.3.1.4"  # taille en octets d'une unité d'allocation
@@ -164,13 +174,23 @@ async def _collecter_scalaire(equipement: dict, element, timeout: float, retries
 
 async def _collecter_par_interface(equipement: dict, element, interfaces: dict[int, int],
                                     timeout: float, retries: int) -> None:
-    """Indicateur relevé une fois par interface (trafic entrant/sortant). Le débit (octets/s)
-    se calcule à la lecture (cf. db.lister_debit) à partir de ces compteurs bruts, jamais
-    stocké directement : on garde la valeur brute telle quelle, pour pouvoir recalculer plus
-    tard. Si le compteur revient en arrière (remise à zéro de l'interface, ou dépassement de
-    sa capacité), on le journalise sans pour autant renoncer à stocker le nouveau relevé brut."""
+    """Indicateur relevé une fois par interface (trafic entrant/sortant). Le compteur 64 bits
+    (OID_IF_HC_COMPTEURS) est préféré au 32 bits configuré dans element_surveille dès qu'il
+    répond. Le débit (octets/s) se calcule à la lecture (cf. db.lister_debit) à partir de ces
+    compteurs bruts, jamais stocké directement : on garde la valeur brute telle quelle, pour
+    pouvoir recalculer plus tard. Si le compteur revient en arrière (remise à zéro de
+    l'interface, ou dépassement de sa capacité), on le journalise sans pour autant renoncer à
+    stocker le nouveau relevé brut."""
     host, community = equipement["adresse"], equipement["communaute_snmp"]
-    valeurs = await snmp_walk(host, community, element["oid"], timeout=timeout, retries=retries)
+    oid_64_bits = OID_IF_HC_COMPTEURS.get(element["code"])
+    valeurs = {}
+    if oid_64_bits:
+        try:
+            valeurs = await snmp_walk(host, community, oid_64_bits, timeout=timeout, retries=retries)
+        except SnmpError:
+            valeurs = {}
+    if not valeurs:
+        valeurs = await snmp_walk(host, community, element["oid"], timeout=timeout, retries=retries)
     if not valeurs:
         raise SnmpError("table vide ou non supportée")
     for oid, valeur in valeurs.items():
@@ -213,6 +233,21 @@ def _calculer_utilisation_interfaces(equipement: dict, interfaces: dict[int, int
             continue  # pas encore deux relevés bruts consécutifs pour calculer un débit
 
         taux = max(debits) * 8 / interface["vitesse"] * 100
+        if taux > 100:
+            # Physiquement impossible (on ne peut pas transférer plus que la capacité du lien
+            # sur l'intervalle de collecte) : signe d'une discontinuité du compteur source
+            # (ex. bascule 32 bits -> 64 bits sur un équipement qui a déjà de l'historique en
+            # 32 bits) plutôt que d'un vrai pic de trafic. Neutralisé comme un retour en
+            # arrière de compteur : ni mesure stockée, ni alerte, juste journalisé.
+            db.enregistrer_erreur_collecte(
+                equipement["id"], "VALEUR_ABERRANTE",
+                f"Interface « {interface['nom']} » : taux d'utilisation calculé à {taux:.1f} %, "
+                "supérieur à 100 % -> ignoré (débit non calculable sur ce point)",
+            )
+            if seuil is not None:
+                db.resoudre_alerte_interface_utilisation(equipement["id"], interface_id, seuil["id"])
+            continue
+
         db.enregistrer_mesure(equipement["id"], metrique["id"], taux, interface_id)
 
         if seuil is None:

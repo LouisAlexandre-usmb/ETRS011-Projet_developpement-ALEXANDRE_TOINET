@@ -258,6 +258,9 @@
 <script>
   const idEquipement = {{ equipement.id }};
   const graphiques = {};
+  Chart.defaults.font.family = "'Hanken Grotesk', system-ui, sans-serif";
+  Chart.defaults.color = "#7A756C";
+  Chart.defaults.borderColor = "rgba(31, 29, 26, .07)";
 
   // Les horodatages en base sont en UTC ; les champs datetime-local, eux, sont en heure
   // locale du navigateur -> il faut convertir dans les deux sens pour que la plage
@@ -294,7 +297,7 @@
     if (graphiques[canvasId]) graphiques[canvasId].destroy();
     graphiques[canvasId] = new Chart(document.getElementById(canvasId), {
       type: "line",
-      data: { labels: etiquettes, datasets: [{ label: libelle, data: valeurs, borderColor: "#17707F", spanGaps: false }] },
+      data: { labels: etiquettes, datasets: [{ label: libelle, data: valeurs, borderColor: "#1F1D1A", backgroundColor: "rgba(200, 242, 92, .35)", fill: "origin", tension: .3, borderWidth: 2, pointRadius: 0, spanGaps: false }] },
       options: { animation: false, scales: { y: { beginAtZero: true } } },
     });
   }
@@ -329,8 +332,8 @@
       data: {
         labels: etiquettes,
         datasets: [
-          { label: "Entrant (Mb/s)", data: entrant.map((m) => versMbps(m.valeur)), borderColor: "#17707F" },
-          { label: "Sortant (Mb/s)", data: sortant.map((m) => versMbps(m.valeur)), borderColor: "#B45514" },
+          { label: "Entrant (Mb/s)", data: entrant.map((m) => versMbps(m.valeur)), borderColor: "#1F1D1A", backgroundColor: "rgba(200, 242, 92, .35)", fill: "origin", tension: .3, borderWidth: 2, pointRadius: 0 },
+          { label: "Sortant (Mb/s)", data: sortant.map((m) => versMbps(m.valeur)), borderColor: "#8A94A6", borderDash: [5, 4], tension: .3, borderWidth: 2, pointRadius: 0 },
         ],
       },
       options: { animation: false, scales: { y: { beginAtZero: true } } },

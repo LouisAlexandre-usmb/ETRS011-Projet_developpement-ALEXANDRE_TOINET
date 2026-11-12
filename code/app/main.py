@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     planificateur.shutdown()
 
 
-app = FastAPI(title="Supervision SNMP", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="Supervision SNMP", version="0.6.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -91,6 +91,7 @@ async def tableau_de_bord(request: Request):
     equipements = db.lister_equipements()
     return templates.TemplateResponse(request, "index.html", {
         "equipements": equipements,
+        "groupes_vides": db.lister_groupes_vides(),
         "page_active": "tableau_de_bord",
     })
 
@@ -373,6 +374,14 @@ async def creer_groupe_html(nom: str = Form(...)):
         message = f"Le groupe « {nom} » existe déjà"
         return RedirectResponse(f"/inventaire?erreur={quote(message)}&section=groupes#groupes", status_code=303)
     return RedirectResponse("/inventaire?section=groupes#groupes", status_code=303)
+
+
+@app.post("/groupes/{id_groupe}/supprimer")
+async def supprimer_groupe_html(id_groupe: int):
+    """Supprime un groupe vide depuis le tableau de bord (le bouton n'est affiché que
+    pour les groupes sans équipement ; db.supprimer_groupe_si_vide revérifie quand même)."""
+    db.supprimer_groupe_si_vide(id_groupe)
+    return RedirectResponse("/", status_code=303)
 
 
 # ---------------------------------------------------------------- API JSON

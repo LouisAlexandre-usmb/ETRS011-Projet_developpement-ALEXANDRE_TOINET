@@ -566,6 +566,27 @@ def creer_groupe(nom: str) -> int:
         return curseur.lastrowid
 
 
+def lister_groupes_vides() -> list[sqlite3.Row]:
+    """Groupes qui ne contiennent aucun équipement (candidats à la suppression)."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT groupe.* FROM groupe WHERE NOT EXISTS "
+            "(SELECT 1 FROM equipement WHERE equipement.groupe_id = groupe.id) "
+            "ORDER BY groupe.nom"
+        ).fetchall()
+
+
+def supprimer_groupe_si_vide(groupe_id: int) -> None:
+    """Supprime un groupe, seulement s'il ne contient encore aucun équipement (vérifié ici,
+    pas juste côté affichage, pour parer à un équipement ajouté entre-temps dans ce groupe)."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "DELETE FROM groupe WHERE id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM equipement WHERE equipement.groupe_id = groupe.id)",
+            (groupe_id,),
+        )
+
+
 # ---------------------------------------------------------------- collecte
 
 def lister_equipements_actifs() -> list[sqlite3.Row]:

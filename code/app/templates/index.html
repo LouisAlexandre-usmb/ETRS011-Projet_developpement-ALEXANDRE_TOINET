@@ -56,6 +56,23 @@
           <a href="/inventaire">Gestion de l'inventaire</a>.</p>
       </section>
     {% endif %}
+
+    {% for g in groupes_vides %}
+      <section class="carte">
+        <div class="resume-groupe">
+          <span>{{ g.nom }} <span class="meta">(0)</span></span>
+          <form method="post" action="/groupes/{{ g.id }}/supprimer"
+                onsubmit="return confirm('Supprimer le groupe vide « {{ g.nom }} » ?')">
+            <button type="submit" class="bouton-supprimer-groupe" title="Supprimer ce groupe vide">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+              </svg>
+            </button>
+          </form>
+        </div>
+      </section>
+    {% endfor %}
     </div>
 
     <section class="carte">
@@ -94,8 +111,10 @@
 {% if equipements %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
+  Chart.defaults.font.family = "'Hanken Grotesk', system-ui, sans-serif";
+  Chart.defaults.color = "#7A756C";
   new Chart(document.getElementById("camembert-statuts"), {
-    type: "pie",
+    type: "doughnut",
     data: {
       labels: ["Opérationnel", "Dégradé", "Indisponible", "En attente"],
       datasets: [{
@@ -106,13 +125,15 @@
           {{ equipements|selectattr('statut', 'equalto', 'EN_ATTENTE')|list|length }}
         ],
         // Mêmes couleurs que les pastilles de statut, pour rester cohérent avec le reste de la page.
-        backgroundColor: ["#2E7D32", "#E08E00", "#C62828", "#5B6676"],
+        backgroundColor: ["#2E9E6A", "#E0A100", "#E5484D", "#A8A397"],
         borderColor: "#FFFFFF",
-        borderWidth: 2,
+        borderWidth: 3,
+        borderRadius: 4,
       }],
     },
     options: {
       animation: false,
+      cutout: "68%",
       plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
     },
   });
