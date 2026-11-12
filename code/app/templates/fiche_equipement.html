@@ -20,31 +20,44 @@
                             else 'ko' if equipement.statut == 'INDISPONIBLE'
                             else 'attente' }}">{{ equipement.statut }}</span>
     </div>
-    <dl class="infos">
-      <dt>Adresse</dt><dd><code>{{ equipement.adresse }}</code></dd>
-      <dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd>
-      <dt>Description</dt><dd>{{ equipement.description or '—' }}</dd>
-      <dt>Système</dt><dd>{{ equipement.description_systeme or '—' }}</dd>
-      <dt>Système reconnu</dt><dd>{{ equipement.systeme or 'non identifié (modèle générique ou hôte standard)' }}</dd>
-      <dt>Modèle de supervision</dt><dd>{{ equipement.modele_nom }}</dd>
-      <dt>Version SNMP</dt><dd>{{ 'v1' if equipement.version_snmp == 'V1' else 'v2c' }}</dd>
-      <dt>sysObjectID</dt><dd><code>{{ equipement.sys_object_id or '—' }}</code></dd>
-      <dt>Parent</dt>
-      <dd>
-        {% if equipement.parent_nom %}
-          <a href="/equipements/{{ equipement.parent_id }}">{{ equipement.parent_nom }}</a>
-        {% else %}—{% endif %}
-      </dd>
-      <dt>Enfants</dt>
-      <dd>
-        {% if enfants %}
-          {% for en in enfants %}<a href="/equipements/{{ en.id }}">{{ en.nom }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
-        {% else %}—{% endif %}
-      </dd>
-      <dt>Échecs consécutifs</dt><dd>{{ equipement.nb_echecs_consecutifs }}</dd>
-      <dt>Dernière collecte</dt><dd>{{ equipement.derniere_collecte | date_fr if equipement.derniere_collecte else 'jamais' }}</dd>
-      <dt>Ajouté le</dt><dd>{{ equipement.date_ajout | date_fr }}</dd>
-    </dl>
+    <div class="identite">
+      <div class="identite-bloc">
+        <h3>Accès SNMP</h3>
+        <dl>
+          <div><dt>Adresse</dt><dd><code>{{ equipement.adresse }}</code></dd></div>
+          <div><dt>Version SNMP</dt><dd>{{ 'v1' if equipement.version_snmp == 'V1' else 'v2c' }}</dd></div>
+          <div><dt>Modèle de supervision</dt><dd>{{ equipement.modele_nom }}</dd></div>
+          <div><dt>Système reconnu</dt><dd>{{ equipement.systeme or 'non identifié (modèle générique ou hôte standard)' }}</dd></div>
+          <div><dt>Système</dt><dd title="{{ equipement.description_systeme or '' }}">{{ (equipement.description_systeme or '—').replace('\n', ' ') | truncate(120) }}</dd></div>
+          <div><dt>sysObjectID</dt><dd><code>{{ equipement.sys_object_id or '—' }}</code></dd></div>
+        </dl>
+      </div>
+      <div class="identite-bloc">
+        <h3>Organisation</h3>
+        <dl>
+          <div><dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd></div>
+          <div><dt>Description</dt><dd>{{ (equipement.description or '—') | truncate(120) }}</dd></div>
+          <div><dt>Parent</dt><dd>
+            {% if equipement.parent_nom %}
+              <a href="/equipements/{{ equipement.parent_id }}">{{ equipement.parent_nom }}</a>
+            {% else %}—{% endif %}
+          </dd></div>
+          <div><dt>Enfants</dt><dd>
+            {% if enfants %}
+              {% for en in enfants %}<a href="/equipements/{{ en.id }}">{{ en.nom }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+            {% else %}—{% endif %}
+          </dd></div>
+        </dl>
+      </div>
+      <div class="identite-bloc">
+        <h3>Collecte</h3>
+        <dl>
+          <div><dt>Dernière collecte</dt><dd>{{ equipement.derniere_collecte | date_fr if equipement.derniere_collecte else 'jamais' }}</dd></div>
+          <div><dt>Échecs consécutifs</dt><dd>{{ equipement.nb_echecs_consecutifs }}</dd></div>
+          <div><dt>Ajouté le</dt><dd>{{ equipement.date_ajout | date_fr }}</dd></div>
+        </dl>
+      </div>
+    </div>
   </section>
 
   <details class="carte" id="alertes" data-rafraichir {{ 'open' if alertes }}>
