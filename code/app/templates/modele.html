@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block titre %}{{ modele.nom }} · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  {% set codes_du_modele = elements | map(attribute='code') | list %}
+  {% set codes_calcul_specifique = ['cpu', 'ram', 'volume'] %}
+  <a href="/modeles" class="lien-retour">&larr; Modèles de supervision</a>
+
+  <section class="carte">
+    <div class="carte-titre">
+      <h2>{{ modele.nom }}</h2>
+      <form method="post" action="/modeles/{{ modele.id }}/supprimer"
+            onsubmit="return confirm('Supprimer définitivement le modèle « {{ modele.nom }} » ?')">
+        <button type="submit" class="bouton-discret bouton-discret-danger"
+                {% if equipements_du_modele %}disabled title="Utilisé par des équipements : changez d'abord leur modèle"{% endif %}>
+          Supprimer le modèle
+        </button>
+      </form>
+    </div>
+    <p class="meta">{{ modele.description or 'Pas de description.' }}</p>
+    <p class="meta">
+      Utilisé par :
+      {% for e in equipements_du_modele %}
+        <a href="/equipements/{{ e.id }}" class="lien-texte">{{ e.nom }}</a>{% if not loop.last %}, {% endif %}
+      {% else %}
+        aucun équipement pour l'instant (à choisir à l'ajout d'un équipement, ou depuis sa fiche).
+      {% endfor %}
+    </p>
+
+    <details class="sous-section">
+      <summary>Renommer ou modifier la description</summary>
+      <form method="post" action="/modeles/{{ modele.id }}/modifier" class="formulaire">
+        <label>Nom
+          <input type="text" name="nom" value="{{ modele.nom }}" required>
+        </label>
+        <label>Description (optionnel)
+          <input type="text" name="description" value="{{ modele.description or '' }}">
+        </label>
+        <button type="submit">Enregistrer</button>
+      </form>
+    </details>
+  </section>
+
+  <section class="carte" id="metriques">
+    <div class="carte-titre">
+      <h2>Métriques supervisées</h2>
+      <span class="meta">{{ elements | selectattr('actif') | list | length }} collectée(s) sur {{ elements | length }}</span>
+    </div>
+    <table class="tableau">
+      <thead>
+        <tr><th>Métrique</th><th>Type</th><th>OID interrogé</th><th>État</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for el in elements %}
+          <tr>
+            <td>
+              {{ el.libelle }}{% if el.unite %} <span class="meta">({{ el.unite }})</span>{% endif %}
+              {% if el.code in codes_calcul_specifique %}
+                <div class="meta petit">calcul spécifique, cf. aide ci-dessous</div>
+              {% endif %}
+            </td>
+            <td class="meta">
+              {{ 'Jauge' if el.type_valeur == 'JAUGE' else 'Compteur' }}{% if el.par_interface %} · par interface{% endif %}
+            </td>
+            <td>
+              <form method="post" action="/elements/{{ el.id }}/oid" class="form-oid">
+                <input type="text" name="oid" value="{{ el.oid }}" class="champ-oid" required
+                       aria-label="OID de {{ el.libelle }}">
+                <button type="submit" class="bouton-discret">Modifier</button>
+              </form>
+            </td>
+            <td>
+              <span class="pastille {{ 'ok' if el.actif else 'attente' }}">{{ 'Collectée' if el.actif else 'En pause' }}</span>
+            </td>
+            <td class="actions">
+              <form method="post" action="/elements/{{ el.id }}/basculer">
+                <button type="submit" class="bouton-discret">{{ 'Mettre en pause' if el.actif else 'Reprendre' }}</button>
+              </form>
+              <form method="post" action="/elements/{{ el.id }}/supprimer"
+                    onsubmit="return confirm('Retirer « {{ el.libelle }} » de ce modèle ? (son historique de mesures est conservé)')">
+                <button type="submit" class="bouton-supprimer-groupe" title="Retirer du modèle">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+                  </svg>
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="meta">Aucune métrique : ajoutez-en une ci-dessous.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <div class="colonnes-2">
+    <section class="carte" id="ajouter">
+      <div class="carte-titre"><h2>Ajouter une métrique</h2></div>
+      <form method="post" action="/modeles/{{ modele.id }}/elements" class="formulaire formulaire-large">
+        <label>Métrique
+          <select name="metrique_id" id="choix-metrique">
+            <option value="nouvelle">Nouvelle métrique…</option>
+            <optgroup label="Métriques existantes">
+              {% for m in catalogue %}
+                <option value="{{ m.id }}" {{ 'disabled' if m.code in codes_du_modele }}>
+                  {{ m.libelle }}{% if m.code in codes_du_modele %} (déjà dans ce modèle){% endif %}
+                </option>
+              {% endfor %}
+            </optgroup>
+          </select>
+        </label>
+
+        <fieldset class="groupe-champs" id="champs-nouvelle-metrique">
+          <label>Libellé
+            <input type="text" name="libelle" id="libelle-nouvelle-metrique" placeholder="ex. Température SW1">
+          </label>
+          <div class="champs-ligne">
+            <label>Unité (optionnel)
+              <input type="text" name="unite" placeholder="ex. °C, %, tr/min">
+            </label>
+            <label>Type de valeur
+              <select name="type_valeur">
+                <option value="JAUGE">Jauge (valeur instantanée)</option>
+                <option value="COMPTEUR">Compteur (total qui augmente)</option>
+              </select>
+            </label>
+          </div>
+          <label class="case">
+            <input type="checkbox" name="par_interface" value="1">
+            Une valeur par interface réseau
+          </label>
+        </fieldset>
+
+        <label>OID
+          <input type="text" name="oid" id="oid-nouvel-element" required class="champ-mono"
+                 placeholder="ex. 1.3.6.1.4.1.9.9.13.1.3.1.3.1004">
+        </label>
+        <button type="submit">Ajouter au modèle</button>
+      </form>
+
+      <div class="aide">
+        <p><strong>Une valeur unique</strong> (température, état d'une alimentation…) : l'OID complet, index
+          compris (souvent terminé par <code>.0</code> ou par le numéro du capteur).</p>
+        <p><strong>Une valeur par interface</strong> : l'OID de la colonne, sans index ; chaque ligne est
+          rattachée à l'interface de même ifIndex.</p>
+        <p><strong>Jauge ou compteur ?</strong> Une jauge se lit telle quelle (température, pourcentage…) ;
+          un compteur ne fait qu'augmenter, l'appli en déduit un débit par seconde.</p>
+        <p><strong>CPU, Mémoire, Stockage</strong> ont un calcul spécifique (moyenne des cœurs,
+          HOST-RESOURCES-MIB ou mémoire Cisco). Pour un autre constructeur, créez une nouvelle métrique.</p>
+      </div>
+    </section>
+
+    <section class="carte" id="tester">
+      <div class="carte-titre"><h2>Tester un OID</h2></div>
+      <p class="meta">Interroge un équipement tout de suite, pour vérifier ce que renvoie un OID avant de
+        l'ajouter.</p>
+      <form method="post" action="/modeles/{{ modele.id }}/tester-oid#tester" class="formulaire formulaire-large">
+        <label>Équipement
+          <select name="equipement_id">
+            {% set id_par_defaut = test.equipement_id if test else (equipements_du_modele[0].id if equipements_du_modele else none) %}
+            {% for e in equipements %}
+              <option value="{{ e.id }}" {{ 'selected' if e.id == id_par_defaut }}>{{ e.nom }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>OID
+          <input type="text" name="oid" required class="champ-mono" value="{{ test.oid if test else '' }}"
+                 placeholder="ex. 1.3.6.1.4.1.9.9.13.1.3.1.3">
+        </label>
+        <button type="submit">Tester</button>
+      </form>
+
+      {% if test %}
+        <div class="resultat-test">
+          {% if test.erreur %}
+            <p class="bandeau-erreur">{{ test.erreur }}</p>
+          {% elif test.type == 'valeur' %}
+            <p class="meta">{{ test.equipement_nom }} renvoie une valeur unique :</p>
+          {% else %}
+            <p class="meta">
+              C'est une table : {{ test.equipement_nom }} renvoie {{ test.nb_lignes }} ligne(s){% if test.nb_lignes > test.lignes|length %}, {{ test.lignes|length }} premières affichées{% endif %}.
+              Pour une valeur unique, utilisez l'OID d'une ligne ; pour une valeur par interface, l'OID de la colonne.
+            </p>
+            <button type="button" class="bouton-discret utiliser-oid" data-oid="{{ test.oid_colonne }}">
+              Utiliser la colonne entière
+            </button>
+          {% endif %}
+          {% if test.lignes %}
+            <table class="tableau">
+              <thead><tr><th>OID</th><th>Valeur</th><th></th></tr></thead>
+              <tbody>
+                {% for o, v in test.lignes %}
+                  <tr>
+                    <td><code>{{ o }}</code></td>
+                    <td>{{ v }}</td>
+                    <td><button type="button" class="bouton-discret utiliser-oid" data-oid="{{ o }}">Utiliser</button></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        </div>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Les champs « nouvelle métrique » ne s'affichent (et le libellé n'est obligatoire) que si
+  // l'utilisateur crée une métrique, pas s'il en choisit une du catalogue.
+  const choix = document.getElementById("choix-metrique");
+  const champsNouvelle = document.getElementById("champs-nouvelle-metrique");
+  const libelle = document.getElementById("libelle-nouvelle-metrique");
+  function majChampsNouvelle() {
+    const nouvelle = choix.value === "nouvelle";
+    champsNouvelle.hidden = !nouvelle;
+    libelle.required = nouvelle;
+  }
+  choix.addEventListener("change", majChampsNouvelle);
+  majChampsNouvelle();
+
+  // « Utiliser » dans le résultat d'un test : recopie l'OID dans le formulaire d'ajout.
+  const champOid = document.getElementById("oid-nouvel-element");
+  document.querySelectorAll(".utiliser-oid").forEach((bouton) => {
+    bouton.addEventListener("click", () => {
+      champOid.value = bouton.dataset.oid;
+      document.getElementById("ajouter").scrollIntoView({ behavior: "smooth" });
+      champOid.focus({ preventScroll: true });
+    });
+  });
+</script>
+{% endblock %}

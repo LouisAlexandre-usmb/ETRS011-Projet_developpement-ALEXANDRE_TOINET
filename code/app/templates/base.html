@@ -11,17 +11,18 @@
 </head>
 <body>
   <header class="entete">
-    <h1>Supervision SNMP</h1>
+    <h1>Super vision</h1>
     <nav class="navigation">
       <a href="/" class="{{ 'actif' if page_active == 'tableau_de_bord' }}">Tableau de bord</a>
       <a href="/inventaire" class="{{ 'actif' if page_active == 'inventaire' }}">Gestion de l'inventaire</a>
+      <a href="/modeles" class="{{ 'actif' if page_active == 'modeles' }}">Modèles de supervision</a>
       <a href="/alertes" class="{{ 'actif' if page_active == 'alertes' }}">Alertes</a>
       <a href="/logs" class="{{ 'actif' if page_active == 'logs' }}">Logs</a>
     </nav>
-    <span class="version">v0.6 · nouvelle charte graphique</span>
+    <span class="version">v0.7 · modèles de supervision personnalisés</span>
   </header>
 
-  <main class="contenu{{ ' contenu-large' if page_active in ('fiche_equipement', 'tableau_de_bord') }}">
+  <main class="contenu{{ ' contenu-large' if page_active in ('fiche_equipement', 'tableau_de_bord', 'alertes', 'logs', 'modeles') }}">
     {% if erreur %}
       <p class="bandeau-erreur">{{ erreur }}</p>
     {% endif %}

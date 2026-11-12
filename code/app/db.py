@@ -4,7 +4,9 @@ Pas d'ORM : le SQL est écrit à la main. Chaque fonction ouvre sa propre
 connexion et la referme ; pour le volume de ce projet, c'est plus simple à suivre qu'un pool
 de connexions partagées.
 """
+import re
 import sqlite3
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -107,6 +109,12 @@ def _seed(connexion: sqlite3.Connection) -> None:
         "VALUES (?, ?, ?, ?, ?)",
         metriques,
     )
+
+    # Les modèles par défaut ne sont créés que sur une base vierge : ensuite, ils sont
+    # modifiables depuis l'interface, et les recréer à chaque démarrage réintroduirait les
+    # métriques que l'utilisateur en a retirées.
+    if connexion.execute("SELECT COUNT(*) FROM modele_supervision").fetchone()[0] > 0:
+        return
 
     elements_communs = [
         ("uptime", "1.3.6.1.2.1.1.3.0"),           # sysUpTime, scalaire
@@ -620,11 +628,160 @@ def lister_elements_actifs(modele_supervision_id: int) -> list[sqlite3.Row]:
     with get_connection() as connexion:
         return connexion.execute(
             "SELECT element_surveille.oid, metrique.id AS metrique_id, metrique.code, "
-            "metrique.type_valeur, metrique.par_interface "
+            "metrique.libelle, metrique.unite, metrique.type_valeur, metrique.par_interface "
             "FROM element_surveille JOIN metrique ON metrique.id = element_surveille.metrique_id "
-            "WHERE element_surveille.modele_supervision_id = ? AND element_surveille.actif = 1",
+            "WHERE element_surveille.modele_supervision_id = ? AND element_surveille.actif = 1 "
+            "ORDER BY metrique.libelle",
             (modele_supervision_id,),
         ).fetchall()
+
+
+# ---------------------------------------------------------------- modèles de supervision
+
+def lister_modeles_detailles() -> list[sqlite3.Row]:
+    """Modèles avec, pour la page de gestion, leur nombre d'équipements et la liste de
+    leurs métriques (libellés séparés par « · »)."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT modele_supervision.*, "
+            "  (SELECT COUNT(*) FROM equipement "
+            "   WHERE equipement.modele_supervision_id = modele_supervision.id) AS nb_equipements, "
+            "  (SELECT COUNT(*) FROM element_surveille "
+            "   WHERE element_surveille.modele_supervision_id = modele_supervision.id) AS nb_metriques, "
+            "  (SELECT group_concat(metrique.libelle, ' · ') FROM element_surveille "
+            "   JOIN metrique ON metrique.id = element_surveille.metrique_id "
+            "   WHERE element_surveille.modele_supervision_id = modele_supervision.id) AS metriques "
+            "FROM modele_supervision ORDER BY modele_supervision.nom"
+        ).fetchall()
+
+
+def obtenir_modele(modele_id: int) -> sqlite3.Row | None:
+    with get_connection() as connexion:
+        return connexion.execute("SELECT * FROM modele_supervision WHERE id = ?", (modele_id,)).fetchone()
+
+
+def creer_modele(nom: str, description: str | None, modele_source_id: int | None = None) -> int:
+    """Crée un modèle ; s'il part d'un modèle existant, recopie ses éléments surveillés
+    (mêmes métriques, mêmes OID, même état actif/inactif). Lève IntegrityError si le nom
+    est déjà pris."""
+    with get_connection() as connexion:
+        curseur = connexion.execute(
+            "INSERT INTO modele_supervision (nom, description) VALUES (?, ?)", (nom, description)
+        )
+        if modele_source_id:
+            connexion.execute(
+                "INSERT INTO element_surveille (modele_supervision_id, metrique_id, oid, actif) "
+                "SELECT ?, metrique_id, oid, actif FROM element_surveille WHERE modele_supervision_id = ?",
+                (curseur.lastrowid, modele_source_id),
+            )
+        return curseur.lastrowid
+
+
+def modifier_modele(modele_id: int, nom: str, description: str | None) -> None:
+    """Lève IntegrityError si le nouveau nom est déjà pris par un autre modèle."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "UPDATE modele_supervision SET nom = ?, description = ? WHERE id = ?",
+            (nom, description, modele_id),
+        )
+
+
+def supprimer_modele(modele_id: int) -> None:
+    """Supprime un modèle et ses éléments surveillés (cascade). Lève IntegrityError s'il
+    est encore utilisé par un équipement (clé étrangère sans cascade sur equipement)."""
+    with get_connection() as connexion:
+        connexion.execute("DELETE FROM modele_supervision WHERE id = ?", (modele_id,))
+
+
+def lister_equipements_du_modele(modele_id: int) -> list[sqlite3.Row]:
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT id, nom, statut FROM equipement WHERE modele_supervision_id = ? ORDER BY nom",
+            (modele_id,),
+        ).fetchall()
+
+
+def lister_elements_modele(modele_id: int) -> list[sqlite3.Row]:
+    """Tous les éléments surveillés d'un modèle, actifs ou non, avec leur métrique."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT element_surveille.id, element_surveille.oid, element_surveille.actif, "
+            "metrique.code, metrique.libelle, metrique.unite, metrique.type_valeur, metrique.par_interface "
+            "FROM element_surveille JOIN metrique ON metrique.id = element_surveille.metrique_id "
+            "WHERE element_surveille.modele_supervision_id = ? ORDER BY metrique.libelle",
+            (modele_id,),
+        ).fetchall()
+
+
+def lister_metriques_catalogue() -> list[sqlite3.Row]:
+    """Métriques qu'on peut associer à un OID (toutes sauf celles purement calculées, qui
+    n'ont pas d'OID : le taux d'utilisation des interfaces)."""
+    with get_connection() as connexion:
+        return connexion.execute(
+            "SELECT * FROM metrique WHERE code != 'utilisation_interface' ORDER BY libelle"
+        ).fetchall()
+
+
+def creer_metrique(libelle: str, unite: str | None, type_valeur: str, par_interface: bool) -> int:
+    """Ajoute une métrique au catalogue. Son code (identifiant technique) est déduit du
+    libellé (« Température SW1 » -> « temperature_sw1 »), avec un suffixe s'il est déjà
+    pris : un code existant, notamment cpu/ram/volume qui ont un traitement particulier à
+    la collecte, n'est donc jamais réutilisé par erreur."""
+    base = unicodedata.normalize("NFKD", libelle).encode("ascii", "ignore").decode().lower()
+    base = re.sub(r"[^a-z0-9]+", "_", base).strip("_") or "metrique"
+    with get_connection() as connexion:
+        code, suffixe = base, 2
+        while connexion.execute("SELECT 1 FROM metrique WHERE code = ?", (code,)).fetchone():
+            code, suffixe = f"{base}_{suffixe}", suffixe + 1
+        curseur = connexion.execute(
+            "INSERT INTO metrique (code, libelle, unite, type_valeur, par_interface) VALUES (?, ?, ?, ?, ?)",
+            (code, libelle, unite, type_valeur, int(par_interface)),
+        )
+        return curseur.lastrowid
+
+
+def ajouter_element(modele_id: int, metrique_id: int, oid: str) -> None:
+    """Lève IntegrityError si cette métrique est déjà supervisée par ce modèle."""
+    with get_connection() as connexion:
+        connexion.execute(
+            "INSERT INTO element_surveille (modele_supervision_id, metrique_id, oid) VALUES (?, ?, ?)",
+            (modele_id, metrique_id, oid),
+        )
+
+
+def _modele_de_l_element(connexion: sqlite3.Connection, element_id: int) -> int | None:
+    ligne = connexion.execute(
+        "SELECT modele_supervision_id FROM element_surveille WHERE id = ?", (element_id,)
+    ).fetchone()
+    return ligne["modele_supervision_id"] if ligne else None
+
+
+def modele_de_l_element(element_id: int) -> int | None:
+    with get_connection() as connexion:
+        return _modele_de_l_element(connexion, element_id)
+
+
+def modifier_oid_element(element_id: int, oid: str) -> int | None:
+    """Change l'OID d'un élément surveillé ; renvoie l'id de son modèle (None si introuvable)."""
+    with get_connection() as connexion:
+        connexion.execute("UPDATE element_surveille SET oid = ? WHERE id = ?", (oid, element_id))
+        return _modele_de_l_element(connexion, element_id)
+
+
+def basculer_element(element_id: int) -> int | None:
+    """Active/désactive un élément surveillé (désactivé = plus collecté, mais conservé)."""
+    with get_connection() as connexion:
+        connexion.execute("UPDATE element_surveille SET actif = 1 - actif WHERE id = ?", (element_id,))
+        return _modele_de_l_element(connexion, element_id)
+
+
+def supprimer_element(element_id: int) -> int | None:
+    """Retire une métrique d'un modèle (la métrique reste au catalogue, et son historique
+    de mesures est conservé)."""
+    with get_connection() as connexion:
+        modele_id = _modele_de_l_element(connexion, element_id)
+        connexion.execute("DELETE FROM element_surveille WHERE id = ?", (element_id,))
+        return modele_id
 
 
 def enregistrer_mesure(equipement_id: int, metrique_id: int, valeur: float | None,
@@ -701,9 +858,13 @@ def _changer_statut(connexion: sqlite3.Connection, equipement_id: int,
 
 def enregistrer_reussite_collecte(equipement_id: int) -> None:
     """Après une collecte réussie (l'équipement a répondu) : échecs à zéro, horodatage, et
-    passage à OPERATIONNEL si l'équipement ne l'était pas déjà. Ne touche pas à DEGRADE :
-    ce statut relève des seuils (cf. declencher_alerte_seuil/resoudre_alerte_seuil), pas de
-    la connectivité."""
+    sortie de EN_ATTENTE/INDISPONIBLE. Ne touche pas à DEGRADE : ce statut relève des
+    alertes (cf. declencher_alerte_*/_cloturer_alerte), pas de la connectivité.
+
+    Au retour d'une indisponibilité, l'équipement repasse en DEGRADE s'il a encore des
+    alertes actives (ex. une alerte mémoire déclenchée avant la coupure) : les fonctions
+    declencher_alerte_* ne le feraient pas, puisqu'elles s'arrêtent dès que l'alerte existe
+    déjà. Sans ça, il restait OPERATIONNEL avec une alerte active."""
     with get_connection() as connexion:
         ancien_statut = connexion.execute(
             "SELECT statut FROM equipement WHERE id = ?", (equipement_id,)
@@ -714,7 +875,12 @@ def enregistrer_reussite_collecte(equipement_id: int) -> None:
             (equipement_id,),
         )
         if ancien_statut not in ("OPERATIONNEL", "DEGRADE"):
-            _changer_statut(connexion, equipement_id, ancien_statut, "OPERATIONNEL")
+            a_des_alertes = connexion.execute(
+                "SELECT 1 FROM alerte WHERE equipement_id = ? AND etat = 'ACTIVE' LIMIT 1",
+                (equipement_id,),
+            ).fetchone()
+            _changer_statut(connexion, equipement_id, ancien_statut,
+                            "DEGRADE" if a_des_alertes else "OPERATIONNEL")
 
 
 def enregistrer_echec_collecte(equipement_id: int, nb_echecs_avant_indisponibilite: int) -> None:
@@ -736,10 +902,10 @@ def enregistrer_echec_collecte(equipement_id: int, nb_echecs_avant_indisponibili
 # ---------------------------------------------------------------- seuils et alertes
 
 def lister_seuils_configurables() -> list[sqlite3.Row]:
-    """Métriques pour lesquelles un seuil global peut être défini : CPU, RAM et stockage
-    pour l'instant (pas uptime, qui est un compteur, pas un pourcentage ; pas le
-    trafic par interface, qui demanderait de savoir quelle interface a déclenché l'alerte).
-    Avec le seuil actuel s'il y en a un (LEFT JOIN : peut n'y en avoir aucun)."""
+    """Métriques pour lesquelles un seuil global peut être défini : CPU, RAM, stockage et
+    utilisation d'interface. Liste fixe : les métriques créées dans un modèle personnalisé
+    (ex. une température) n'ont pas de seuil, tant que les seuils ne sont pas réglables par
+    équipement. Avec le seuil actuel s'il y en a un (LEFT JOIN : peut n'y en avoir aucun)."""
     with get_connection() as connexion:
         return connexion.execute(
             "SELECT metrique.id AS metrique_id, metrique.code, metrique.libelle, metrique.unite, "

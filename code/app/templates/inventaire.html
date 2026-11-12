@@ -32,7 +32,7 @@
       </label>
       <p class="legende-modeles" id="legende-modeles-ajout">
         {% for m in modeles %}
-          <span class="info-bulle info-bulle-modele" data-modele="{{ m.id }}" tabindex="0">{{ m.nom }}<span class="info-bulle-icone">i</span><span class="info-bulle-texte">{{ m.description }}</span></span>
+          <span class="info-bulle info-bulle-modele" data-modele="{{ m.id }}" tabindex="0">{{ m.nom }}<span class="info-bulle-icone">i</span><span class="info-bulle-texte">{{ m.description or 'Pas de description.' }}</span></span>
         {% endfor %}
       </p>
       <label>Description (optionnel)

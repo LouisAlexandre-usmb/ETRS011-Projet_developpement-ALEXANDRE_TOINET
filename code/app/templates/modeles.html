@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block titre %}Modèles de supervision · Supervision SNMP{% endblock %}
+
+{% block contenu %}
+  <div class="page-titre">
+    <h2>Modèles de supervision</h2>
+    <span class="meta">{{ modeles|length }} modèle(s)</span>
+  </div>
+  <p class="meta intro">Un modèle dit quelles métriques collecter et avec quels OID. Chaque équipement suit un
+    modèle ; modifier un modèle s'applique à tous les équipements qui l'utilisent.</p>
+
+  <div class="grille-modeles">
+    {% for m in modeles %}
+      <a class="carte carte-modele" href="/modeles/{{ m.id }}">
+        <h3>{{ m.nom }}</h3>
+        <p class="meta">{{ (m.description or 'Pas de description.') | truncate(140) }}</p>
+        <p class="etiquettes">
+          {% for libelle in (m.metriques or '').split(' · ') if libelle %}
+            <span class="etiquette">{{ libelle }}</span>
+          {% else %}
+            <span class="meta">Aucune métrique pour l'instant</span>
+          {% endfor %}
+        </p>
+        <p class="carte-modele-pied">
+          {{ m.nb_metriques }} métrique(s) · {{ m.nb_equipements }} équipement(s)
+        </p>
+      </a>
+    {% endfor %}
+
+    <section class="carte carte-creation" id="creer">
+      <div class="carte-titre"><h2>Créer un modèle</h2></div>
+      <form method="post" action="/modeles" class="formulaire">
+        <label>Nom
+          <input type="text" name="nom" required placeholder="ex. Switch Cisco C1000 + environnement">
+        </label>
+        <label>Description (optionnel)
+          <input type="text" name="description" placeholder="ce que supervise ce modèle, pour quel matériel">
+        </label>
+        <label>Partir de
+          <select name="modele_source_id">
+            <option value="">Un modèle vide</option>
+            {% for m in modeles %}
+              <option value="{{ m.id }}">Une copie de « {{ m.nom }} »</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Créer et ajouter des métriques</button>
+      </form>
+    </section>
+  </div>
+{% endblock %}

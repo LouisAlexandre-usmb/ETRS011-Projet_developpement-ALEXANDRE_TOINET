@@ -3,6 +3,7 @@
 - Pages HTML (Jinja2)  : /
 - API JSON             : /api/...
 """
+import re
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app import collecte, config, db
-from app.snmp_client import SnmpError, lire_infos_systeme
+from app.snmp_client import SnmpError, lire_infos_systeme, snmp_get, snmp_walk
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI):
     planificateur.shutdown()
 
 
-app = FastAPI(title="Supervision SNMP", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="Supervision SNMP", version="0.7.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -85,6 +86,10 @@ async def _interroger_cible() -> tuple[dict | None, str | None]:
         return None, str(exc)
 
 
+# Métriques déjà affichées par un graphique ou un tableau spécifique sur la fiche équipement.
+CODES_AVEC_GRAPHIQUE_DEDIE = {"cpu", "ram", "uptime", "if_in_octets", "if_out_octets", "volume"}
+
+
 # ---------------------------------------------------------------- pages HTML
 @app.get("/", response_class=HTMLResponse)
 async def tableau_de_bord(request: Request):
@@ -102,13 +107,21 @@ async def fiche_equipement(request: Request, id_equipement: int):
     if equipement is None:
         return RedirectResponse(f"/inventaire?erreur={quote('Équipement introuvable')}", status_code=303)
 
-    codes_actifs = {e["code"] for e in db.lister_elements_actifs(equipement["modele_supervision_id"])}
+    elements_actifs = db.lister_elements_actifs(equipement["modele_supervision_id"])
+    codes_actifs = {e["code"] for e in elements_actifs}
+    # Métriques sans graphique dédié dans le template (typiquement celles créées par
+    # l'utilisateur dans un modèle) : un graphique générique est tracé pour chacune.
+    metriques_graphes = [
+        {"code": e["code"], "libelle": e["libelle"], "unite": e["unite"], "par_interface": bool(e["par_interface"])}
+        for e in elements_actifs if e["code"] not in CODES_AVEC_GRAPHIQUE_DEDIE
+    ]
 
     return templates.TemplateResponse(request, "fiche_equipement.html", {
         "equipement": equipement,
         "parametres": db.obtenir_parametres_generaux(),
         "modeles": db.lister_modeles_supervision(),
         "codes_actifs": codes_actifs,
+        "metriques_graphes": metriques_graphes,
         "alertes_actives": db.lister_alertes("ACTIVE", id_equipement),
         "enfants": db.lister_enfants(id_equipement),
         "interfaces": db.lister_interfaces(id_equipement),
@@ -382,6 +395,181 @@ async def supprimer_groupe_html(id_groupe: int):
     pour les groupes sans équipement ; db.supprimer_groupe_si_vide revérifie quand même)."""
     db.supprimer_groupe_si_vide(id_groupe)
     return RedirectResponse("/", status_code=303)
+
+
+# ---------------------------------------------------------------- modèles de supervision
+FORMAT_OID = re.compile(r"\d+(\.\d+)+")
+
+
+def _normaliser_oid(oid: str) -> str | None:
+    """« .1.3.6.1.2.1.1.3.0 » ou « 1.3.6.1.2.1.1.3.0 » -> « 1.3.6.1.2.1.1.3.0 » ; None si ce
+    n'est pas un OID numérique (pas de noms symboliques type « sysUpTime.0 » : il faudrait
+    charger les MIB pour les résoudre)."""
+    oid = oid.strip().lstrip(".")
+    return oid if FORMAT_OID.fullmatch(oid) else None
+
+
+def _rediriger_modele(modele_id: int | None, erreur: str | None = None, ancre: str = "") -> RedirectResponse:
+    if modele_id is None:  # élément introuvable (déjà supprimé, ex. double clic)
+        return RedirectResponse(f"/modeles?erreur={quote('Métrique introuvable')}", status_code=303)
+    url = f"/modeles/{modele_id}"
+    if erreur:
+        url += f"?erreur={quote(erreur)}"
+    return RedirectResponse(url + ancre, status_code=303)
+
+
+@app.get("/modeles", response_class=HTMLResponse)
+async def page_modeles(request: Request):
+    return templates.TemplateResponse(request, "modeles.html", {
+        "modeles": db.lister_modeles_detailles(),
+        "erreur": request.query_params.get("erreur"),
+        "page_active": "modeles",
+    })
+
+
+@app.post("/modeles")
+async def creer_modele_html(nom: str = Form(...), description: str = Form(""),
+                            modele_source_id: str = Form("")):
+    """Crée un modèle, vide ou copié d'un modèle existant, puis ouvre sa page pour y
+    ajouter des métriques."""
+    nom = nom.strip()
+    try:
+        modele_id = db.creer_modele(nom, description.strip() or None,
+                                    int(modele_source_id) if modele_source_id else None)
+    except sqlite3.IntegrityError:
+        message = f"Un modèle nommé « {nom} » existe déjà"
+        return RedirectResponse(f"/modeles?erreur={quote(message)}", status_code=303)
+    return RedirectResponse(f"/modeles/{modele_id}", status_code=303)
+
+
+async def _page_modele(request: Request, modele_id: int, test: dict | None = None):
+    modele = db.obtenir_modele(modele_id)
+    if modele is None:
+        return RedirectResponse(f"/modeles?erreur={quote('Modèle introuvable')}", status_code=303)
+    equipements_du_modele = db.lister_equipements_du_modele(modele_id)
+    return templates.TemplateResponse(request, "modele.html", {
+        "modele": modele,
+        "elements": db.lister_elements_modele(modele_id),
+        "catalogue": db.lister_metriques_catalogue(),
+        "equipements_du_modele": equipements_du_modele,
+        "equipements": db.lister_equipements(),
+        "test": test,
+        "erreur": request.query_params.get("erreur"),
+        "page_active": "modeles",
+    })
+
+
+@app.get("/modeles/{modele_id}", response_class=HTMLResponse)
+async def page_modele(request: Request, modele_id: int):
+    return await _page_modele(request, modele_id)
+
+
+@app.post("/modeles/{modele_id}/modifier")
+async def modifier_modele_html(modele_id: int, nom: str = Form(...), description: str = Form("")):
+    try:
+        db.modifier_modele(modele_id, nom.strip(), description.strip() or None)
+    except sqlite3.IntegrityError:
+        return _rediriger_modele(modele_id, f"Un modèle nommé « {nom.strip()} » existe déjà")
+    return _rediriger_modele(modele_id)
+
+
+@app.post("/modeles/{modele_id}/supprimer")
+async def supprimer_modele_html(modele_id: int):
+    try:
+        db.supprimer_modele(modele_id)
+    except sqlite3.IntegrityError:
+        return _rediriger_modele(
+            modele_id, "Ce modèle est encore utilisé par au moins un équipement : "
+                       "changez d'abord le modèle de ces équipements")
+    return RedirectResponse("/modeles", status_code=303)
+
+
+@app.post("/modeles/{modele_id}/elements")
+async def ajouter_element_html(modele_id: int, oid: str = Form(...), metrique_id: str = Form(...),
+                               libelle: str = Form(""), unite: str = Form(""),
+                               type_valeur: str = Form("JAUGE"), par_interface: str = Form("")):
+    """Ajoute une métrique au modèle : une métrique existante du catalogue, ou une nouvelle
+    (metrique_id = "nouvelle"), créée à la volée avec son libellé, son unité et son type."""
+    oid_normalise = _normaliser_oid(oid)
+    if oid_normalise is None:
+        return _rediriger_modele(modele_id, f"« {oid} » n'est pas un OID numérique (ex. 1.3.6.1.2.1.1.3.0)", "#ajouter")
+
+    if metrique_id == "nouvelle":
+        if not libelle.strip():
+            return _rediriger_modele(modele_id, "Donnez un libellé à la nouvelle métrique", "#ajouter")
+        if type_valeur not in ("JAUGE", "COMPTEUR"):
+            return _rediriger_modele(modele_id, "Type de valeur inconnu", "#ajouter")
+        id_metrique = db.creer_metrique(libelle.strip(), unite.strip() or None, type_valeur, bool(par_interface))
+    else:
+        id_metrique = int(metrique_id)
+
+    try:
+        db.ajouter_element(modele_id, id_metrique, oid_normalise)
+    except sqlite3.IntegrityError:
+        return _rediriger_modele(modele_id, "Cette métrique est déjà supervisée par ce modèle", "#ajouter")
+    return _rediriger_modele(modele_id, ancre="#metriques")
+
+
+@app.post("/elements/{element_id}/oid")
+async def modifier_oid_element_html(element_id: int, oid: str = Form(...)):
+    oid_normalise = _normaliser_oid(oid)
+    if oid_normalise is None:
+        return _rediriger_modele(db.modele_de_l_element(element_id),
+                                 f"« {oid} » n'est pas un OID numérique", "#metriques")
+    modele_id = db.modifier_oid_element(element_id, oid_normalise)
+    return _rediriger_modele(modele_id, ancre="#metriques")
+
+
+@app.post("/elements/{element_id}/basculer")
+async def basculer_element_html(element_id: int):
+    return _rediriger_modele(db.basculer_element(element_id), ancre="#metriques")
+
+
+@app.post("/elements/{element_id}/supprimer")
+async def supprimer_element_html(element_id: int):
+    return _rediriger_modele(db.supprimer_element(element_id), ancre="#metriques")
+
+
+NB_LIGNES_TEST_MAX = 30
+
+
+@app.post("/modeles/{modele_id}/tester-oid", response_class=HTMLResponse)
+async def tester_oid_html(request: Request, modele_id: int, oid: str = Form(...),
+                          equipement_id: int = Form(...)):
+    """Interroge un équipement sur un OID saisi à la main, pour vérifier ce qu'il renvoie
+    avant de l'ajouter au modèle. Essaie d'abord une valeur unique (GET) ; si rien n'existe
+    exactement à cet OID, parcourt la branche (WALK) : c'est le cas d'une colonne de table,
+    dont on affiche alors les lignes (une par index, ex. une par capteur ou par interface)."""
+    test = {"oid": oid, "equipement_id": equipement_id}
+    oid_normalise = _normaliser_oid(oid)
+    equipement = db.obtenir_equipement(equipement_id)
+    if oid_normalise is None:
+        test["erreur"] = "Ce n'est pas un OID numérique (ex. 1.3.6.1.2.1.1.3.0)"
+    elif equipement is None:
+        test["erreur"] = "Équipement introuvable"
+    else:
+        host, communaute = equipement["adresse"], equipement["communaute_snmp"]
+        test["equipement_nom"] = equipement["nom"]
+        try:
+            valeur = next(iter((await snmp_get(host, communaute, [oid_normalise],
+                                               timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES)).values()))
+            try:
+                collecte.valeur_numerique(valeur)
+                test["type"] = "valeur"
+                test["lignes"] = [(oid_normalise, valeur.prettyPrint())]
+            except SnmpError:
+                lignes = await snmp_walk(host, communaute, oid_normalise,
+                                         timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES)
+                if lignes:
+                    test["type"] = "table"
+                    test["oid_colonne"] = oid_normalise
+                    test["nb_lignes"] = len(lignes)
+                    test["lignes"] = [(o, v.prettyPrint()) for o, v in list(lignes.items())[:NB_LIGNES_TEST_MAX]]
+                else:
+                    test["erreur"] = f"Aucune valeur à cet OID sur {equipement['nom']} ({valeur.prettyPrint()})"
+        except SnmpError as exc:
+            test["erreur"] = f"{equipement['nom']} ne répond pas : {exc}"
+    return await _page_modele(request, modele_id, test)
 
 
 # ---------------------------------------------------------------- API JSON

@@ -8,6 +8,8 @@ indicateur, est traité indépendamment.
 import asyncio
 import re
 
+from pysnmp.proto.rfc1905 import EndOfMibView, NoSuchInstance, NoSuchObject
+
 from app import config, db
 from app.snmp_client import OID_SYS_UPTIME, SnmpError, snmp_get, snmp_walk
 
@@ -165,11 +167,29 @@ async def _decouvrir_interfaces(equipement: dict, timeout: float, retries: int) 
     return correspondance
 
 
+def valeur_numerique(valeur) -> float:
+    """Convertit une valeur SNMP en nombre. Un OID saisi à la main peut être faux : en v2c,
+    l'agent ne renvoie alors pas d'erreur mais une valeur spéciale « pas d'objet ici », qu'on
+    transforme en SnmpError pour que seule cette métrique échoue, pas toute la collecte de
+    l'équipement. Idem pour une valeur texte non convertible."""
+    if isinstance(valeur, (NoSuchObject, NoSuchInstance, EndOfMibView)):
+        raise SnmpError("aucune valeur à cet OID sur cet équipement")
+    try:
+        return float(valeur)
+    except (TypeError, ValueError):
+        try:
+            return float(str(valeur))
+        except ValueError:
+            raise SnmpError(f"valeur non numérique « {valeur.prettyPrint()} »") from None
+
+
 async def _collecter_scalaire(equipement: dict, element, timeout: float, retries: int) -> None:
-    """Indicateur qui existe en un seul exemplaire sur l'équipement (ex. uptime)."""
+    """Indicateur qui existe en un seul exemplaire sur l'équipement (ex. uptime, ou une
+    métrique créée par l'utilisateur comme une température)."""
     host, community = equipement["adresse"], equipement["communaute_snmp"]
     valeurs = await snmp_get(host, community, [element["oid"]], timeout=timeout, retries=retries)
-    db.enregistrer_mesure(equipement["id"], element["metrique_id"], float(valeurs[element["oid"]]))
+    valeur = valeur_numerique(next(iter(valeurs.values())))
+    db.enregistrer_mesure(equipement["id"], element["metrique_id"], valeur)
 
 
 async def _collecter_par_interface(equipement: dict, element, interfaces: dict[int, int],
@@ -198,7 +218,7 @@ async def _collecter_par_interface(equipement: dict, element, interfaces: dict[i
         interface_id = interfaces.get(index_snmp)
         if interface_id is None:
             continue
-        valeur = float(valeur)
+        valeur = valeur_numerique(valeur)
         precedente = db.derniere_valeur_mesure(equipement["id"], element["metrique_id"], interface_id)
         if precedente is not None and valeur < precedente:
             db.enregistrer_erreur_collecte(

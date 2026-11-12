@@ -20,28 +20,43 @@
         {% for a in alertes_actives %}{{ a.message }}{% if not loop.last %} · {% endif %}{% endfor %}
       </div>
     {% endif %}
-    <dl class="infos-ligne">
-      <div><dt>Adresse</dt><dd><code>{{ equipement.adresse }}</code></dd></div>
-      <div><dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd></div>
-      <div><dt>Description</dt><dd>{{ (equipement.description or '—') | truncate(60) }}</dd></div>
-      <div><dt>Système</dt><dd title="{{ equipement.description_systeme or '' }}">
-        {{ (equipement.description_systeme or '—').replace('\n', ' ') | truncate(60) }}
-      </dd></div>
-      <div><dt>Modèle</dt><dd>{{ equipement.modele_nom }}</dd></div>
-      <div><dt>Parent</dt><dd>
-        {% if equipement.parent_nom %}
-          <a href="/equipements/{{ equipement.parent_id }}">{{ equipement.parent_nom }}</a>
-        {% else %}—{% endif %}
-      </dd></div>
-      <div><dt>Enfants</dt><dd>
-        {% if enfants %}
-          {% for en in enfants %}<a href="/equipements/{{ en.id }}">{{ en.nom }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
-        {% else %}—{% endif %}
-      </dd></div>
-      <div><dt>Échecs</dt><dd>{{ equipement.nb_echecs_consecutifs }}</dd></div>
-      <div><dt>Dernière collecte</dt><dd>{{ equipement.derniere_collecte | date_fr if equipement.derniere_collecte else 'jamais' }}</dd></div>
-      <div><dt>Ajouté le</dt><dd>{{ equipement.date_ajout | date_fr }}</dd></div>
-    </dl>
+    <div class="identite">
+      <div class="identite-bloc">
+        <h3>Accès SNMP</h3>
+        <dl>
+          <div><dt>Adresse</dt><dd><code>{{ equipement.adresse }}</code></dd></div>
+          <div><dt>Modèle</dt><dd>{{ equipement.modele_nom }}</dd></div>
+          <div><dt>Système</dt><dd title="{{ equipement.description_systeme or '' }}">
+            {{ (equipement.description_systeme or '—').replace('\n', ' ') | truncate(120) }}
+          </dd></div>
+        </dl>
+      </div>
+      <div class="identite-bloc">
+        <h3>Organisation</h3>
+        <dl>
+          <div><dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd></div>
+          <div><dt>Description</dt><dd>{{ (equipement.description or '—') | truncate(120) }}</dd></div>
+          <div><dt>Parent</dt><dd>
+            {% if equipement.parent_nom %}
+              <a href="/equipements/{{ equipement.parent_id }}">{{ equipement.parent_nom }}</a>
+            {% else %}—{% endif %}
+          </dd></div>
+          <div><dt>Enfants</dt><dd>
+            {% if enfants %}
+              {% for en in enfants %}<a href="/equipements/{{ en.id }}">{{ en.nom }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+            {% else %}—{% endif %}
+          </dd></div>
+        </dl>
+      </div>
+      <div class="identite-bloc">
+        <h3>Collecte</h3>
+        <dl>
+          <div><dt>Dernière collecte</dt><dd>{{ equipement.derniere_collecte | date_fr if equipement.derniere_collecte else 'jamais' }}</dd></div>
+          <div><dt>Échecs consécutifs</dt><dd>{{ equipement.nb_echecs_consecutifs }}</dd></div>
+          <div><dt>Ajouté le</dt><dd>{{ equipement.date_ajout | date_fr }}</dd></div>
+        </dl>
+      </div>
+    </div>
   </section>
 
   <section class="carte">
@@ -61,7 +76,8 @@
         <button type="button" class="bouton-discret" data-heures="168">7 j</button>
         <button type="button" class="bouton-discret" id="plage-hier">Hier</button>
       </span>
-      {% if 'if_in_octets' in codes_actifs or 'if_out_octets' in codes_actifs %}
+      {% if 'if_in_octets' in codes_actifs or 'if_out_octets' in codes_actifs
+            or metriques_graphes | selectattr('par_interface') | list %}
         <div class="selecteur-ligne">
           <label class="meta" for="selecteur-interface">Interface</label>
           <select id="selecteur-interface" class="select-leger">
@@ -80,6 +96,9 @@
       {% if 'if_in_octets' in codes_actifs or 'if_out_octets' in codes_actifs %}
         <div><canvas id="graphique-trafic"></canvas></div>
       {% endif %}
+      {% for m in metriques_graphes %}
+        <div><canvas id="graphique-m-{{ m.code }}"></canvas></div>
+      {% endfor %}
     </div>
     {% if not codes_actifs %}
       <p class="meta">Aucune métrique active pour le modèle de supervision de cet équipement.</p>
@@ -247,7 +266,7 @@
     </form>
     <p class="legende-modeles" id="legende-modeles-collecte">
       {% for m in modeles %}
-        <span class="info-bulle info-bulle-modele" data-modele="{{ m.id }}" tabindex="0">{{ m.nom }}<span class="info-bulle-icone">i</span><span class="info-bulle-texte">{{ m.description }}</span></span>
+        <span class="info-bulle info-bulle-modele" data-modele="{{ m.id }}" tabindex="0">{{ m.nom }}<span class="info-bulle-icone">i</span><span class="info-bulle-texte">{{ m.description or 'Pas de description.' }}</span></span>
       {% endfor %}
     </p>
   </dialog>
@@ -258,6 +277,7 @@
 <script>
   const idEquipement = {{ equipement.id }};
   const graphiques = {};
+  const metriquesPersonnalisees = {{ metriques_graphes | tojson }};
   Chart.defaults.font.family = "'Hanken Grotesk', system-ui, sans-serif";
   Chart.defaults.color = "#7A756C";
   Chart.defaults.borderColor = "rgba(31, 29, 26, .07)";
@@ -311,6 +331,15 @@
     }
     if (document.getElementById("graphique-uptime")) {
       dessinerGraphique("graphique-uptime", await chargerSerie("uptime"), "Uptime (jours)", 8640000);
+    }
+    // Métriques des modèles personnalisés : un graphique générique chacune (celles « par
+    // interface » suivent l'interface choisie dans le sélecteur, comme le trafic).
+    const interfaceChoisie = document.getElementById("selecteur-interface")?.value;
+    for (const m of metriquesPersonnalisees) {
+      if (m.par_interface && !interfaceChoisie) continue;
+      const libelle = m.unite ? `${m.libelle} (${m.unite})` : m.libelle;
+      dessinerGraphique(`graphique-m-${m.code}`,
+                        await chargerSerie(m.code, m.par_interface ? interfaceChoisie : null), libelle);
     }
   }
 
@@ -369,7 +398,7 @@
   });
 
   document.getElementById("plage-appliquer").addEventListener("click", rafraichirTout);
-  document.getElementById("selecteur-interface")?.addEventListener("change", rafraichirTrafic);
+  document.getElementById("selecteur-interface")?.addEventListener("change", rafraichirTout);
 
   appliquerPlage(new Date(Date.now() - 24 * 3600 * 1000), new Date());  // plage par défaut : 24 h
 

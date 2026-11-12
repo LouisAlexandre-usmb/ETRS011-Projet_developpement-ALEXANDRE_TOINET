@@ -6,6 +6,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY snmpd.conf /etc/snmp/snmpd.conf
+COPY capteurs.sh /usr/local/bin/capteurs.sh
 
 EXPOSE 161/udp
 
