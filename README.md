@@ -62,7 +62,7 @@ docker compose up --build
    - c. **Établir un planning de travail** : Répartition des tâches et échéances.
 ### **Exigences supplémentaires**
 Dans le cadre de ce développement, il sera également demandé de :
-- Conserver une **trace des échanges avec l'IA** (ex: discussions, suggestions, décisions).
+- Conserver une **trace des échanges avec l'IA** (ex: discussions, suggestions, décisions) : voir **[Utilisation de l'IA dans le projet](Documents/Utilisation%20de%20l%27IA.md)**.
 - **Expliquer les raisons** ayant conduit à retenir ou rejeter certaines propositions.
 - **Justifier certaines parties de code** retenues (choix algorithmiques, optimisations, etc.).
 ---
@@ -70,11 +70,21 @@ Dans le cadre de ce développement, il sera également demandé de :
 ## **📌 Sommaire**
 
 ### **Documents clés**
-- **[Cahier des charges - fonctionnel](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Cahier%20des%20charges.pdf)**
-- **[Cahier des charges - technologique](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/main/Documents/Specifications%20techniques.pdf)**
-- **[SLIDE - Visualisation Globale](https://github.com/LouisAlexandre-usmb/ETRS011-Projet_developpement-ALEXANDRE_TOINET/blob/3bf597d66aadaf42a046e3a4b6a27f496faeed67/Documents/Slide%20powerpoint%20-%20Explications%20mi-parcours.pptx)**
-
+- **[Cahier des charges - fonctionnel](Documents/Cahier%20des%20charges.pdf)**
+- **[Cahier des charges - technologique](Documents/Specifications%20techniques.pdf)**
+- **[SLIDE - Visualisation Globale](Documents/Slide%20powerpoint%20-%20Explications%20mi-parcours.pptx)**
 - **[Planning](https://canva.link/12wkb8e5b6src8n)**
+
+### **Modélisation**
+- **[Diagramme de cas d'utilisation](Documents/Diagrammes/Diagramme_cas_utilisation.png)**
+- **[Diagramme de classes](Documents/Diagrammes/Diagramme_classes.png)**
+
+### **Application**
+- **[Code source](code/)** (lancement : voir la section « Lancement » plus haut)
+- **[Captures d'écran de l'interface](Captures%20d%27%C3%A9cran%20GUI)**
+
+### **Utilisation de l'IA**
+- **[Utilisation de l'IA dans le projet](Documents/Utilisation%20de%20l%27IA.md)**
 ---
  
 ## 👥 Auteurs
