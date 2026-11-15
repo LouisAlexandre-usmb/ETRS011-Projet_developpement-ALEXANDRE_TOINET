@@ -1,7 +1,8 @@
-"""Client SNMP v2c minimal, basé sur PySNMP 7 (API asyncio).
+"""Client SNMP v2c minimal, basé sur PySNMP 7 (API asyncio) : seul module qui parle SNMP.
 
-Il sera réutilisé par le service de collecte : une fonction générique
-`snmp_get` + des fonctions métier (ici : lecture du groupe "system").
+Deux fonctions génériques, `snmp_get` (valeurs précises) et `snmp_walk` (une table entière),
+utilisées par le service de collecte et le testeur d'OID, plus le test de connectivité fait
+à l'ajout d'un équipement (`lire_description_systeme`).
 """
 from pysnmp.hlapi.v3arch.asyncio import (
     CommunityData,
@@ -15,11 +16,8 @@ from pysnmp.hlapi.v3arch.asyncio import (
 )
 
 # OID du groupe "system" de la MIB-II (RFC 1213)
-OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
-OID_SYS_UPTIME = "1.3.6.1.2.1.1.3.0"
-OID_SYS_CONTACT = "1.3.6.1.2.1.1.4.0"
-OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
-OID_SYS_LOCATION = "1.3.6.1.2.1.1.6.0"
+OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"   # test de connectivité à l'ajout d'un équipement
+OID_SYS_UPTIME = "1.3.6.1.2.1.1.3.0"  # test de connectivité au début de chaque collecte
 
 
 class SnmpError(Exception):
@@ -96,27 +94,10 @@ async def snmp_walk(host: str, community: str, oid_base: str, port: int = 161,
     return resultats
 
 
-def formater_uptime(ticks: int) -> str:
-    """sysUpTime est exprimé en centièmes de seconde -> « 3 j 04:12:55 »."""
-    secondes = int(ticks) // 100
-    jours, reste = divmod(secondes, 86400)
-    heures, reste = divmod(reste, 3600)
-    minutes, secondes = divmod(reste, 60)
-    return f"{jours} j {heures:02d}:{minutes:02d}:{secondes:02d}"
-
-
-async def lire_infos_systeme(host: str, community: str, port: int = 161,
-                             timeout: float = 2, retries: int = 1) -> dict[str, str]:
-    """Lit le groupe "system" d'un équipement (sysDescr, sysName, uptime…)."""
-    valeurs = await snmp_get(
-        host, community,
-        [OID_SYS_DESCR, OID_SYS_NAME, OID_SYS_UPTIME, OID_SYS_LOCATION, OID_SYS_CONTACT],
-        port=port, timeout=timeout, retries=retries,
-    )
-    return {
-        "sysDescr": valeurs[OID_SYS_DESCR].prettyPrint(),
-        "sysName": valeurs[OID_SYS_NAME].prettyPrint(),
-        "sysUpTime": formater_uptime(int(valeurs[OID_SYS_UPTIME])),
-        "sysLocation": valeurs[OID_SYS_LOCATION].prettyPrint(),
-        "sysContact": valeurs[OID_SYS_CONTACT].prettyPrint(),
-    }
+async def lire_description_systeme(host: str, community: str,
+                                   timeout: float = 2, retries: int = 1) -> str:
+    """Test de connectivité à l'ajout ou à la modification d'un équipement : lit sysDescr,
+    qui est aussi enregistré comme description système de l'équipement. Lève SnmpError si
+    l'équipement ne répond pas avec ces paramètres."""
+    valeurs = await snmp_get(host, community, [OID_SYS_DESCR], timeout=timeout, retries=retries)
+    return valeurs[OID_SYS_DESCR].prettyPrint()

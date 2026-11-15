@@ -160,8 +160,6 @@ body {
 
 .meta { color: var(--sourdine); font-size: .88rem; }
 
-.sous-titre { margin: 1.5rem 0 0; font-family: var(--titre); font-size: 1.05rem; font-weight: 700; }
-.sous-titre.sans-groupe { font-family: var(--texte); font-style: italic; font-weight: 400; color: var(--sourdine); }
 
 /* ---------------------------------------------------------------- pastilles de statut */
 /* Point coloré avec un léger halo, comme un voyant allumé, suivi du libellé. */

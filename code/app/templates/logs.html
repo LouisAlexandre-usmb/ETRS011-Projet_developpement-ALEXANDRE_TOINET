@@ -24,12 +24,27 @@
     </div>
 
     <form method="get" action="/logs" class="formulaire formulaire-ligne">
+      <label>Type
+        <select name="type">
+          <option value="">Tous</option>
+          <option value="CHANGEMENT_STATUT" {{ 'selected' if type_filtre == 'CHANGEMENT_STATUT' }}>Changements de statut</option>
+          <option value="ALERTE" {{ 'selected' if type_filtre == 'ALERTE' }}>Alertes</option>
+          <option value="ERREUR_COLLECTE" {{ 'selected' if type_filtre == 'ERREUR_COLLECTE' }}>Erreurs de collecte</option>
+        </select>
+      </label>
       <label>Équipement
         <select name="equipement_id">
           <option value="">Tous</option>
           {% for e in equipements %}
-            <option value="{{ e.id }}" {{ 'selected' if equipement_id_filtre == e.id }}>{{ e.nom }}</option>
+            <option value="{{ e.id }}" {{ 'selected' if filtre_equipement == e.id|string }}>{{ e.nom }}</option>
           {% endfor %}
+          {% if equipements_archives %}
+            <optgroup label="Équipements archivés">
+              {% for nom in equipements_archives %}
+                <option value="archive:{{ nom }}" {{ 'selected' if filtre_equipement == 'archive:' ~ nom }}>{{ nom }}</option>
+              {% endfor %}
+            </optgroup>
+          {% endif %}
         </select>
       </label>
       <label>Depuis
@@ -39,7 +54,7 @@
         <input type="date" name="jusqu_a" value="{{ jusqu_a_filtre or '' }}">
       </label>
       <button type="submit">Filtrer</button>
-      {% if equipement_id_filtre or depuis_filtre or jusqu_a_filtre %}
+      {% if type_filtre or filtre_equipement or depuis_filtre or jusqu_a_filtre %}
         <a href="/logs" class="bouton-discret">Réinitialiser</a>
       {% endif %}
     </form>
@@ -52,7 +67,13 @@
         {% for ligne in logs %}
           <tr>
             <td>{{ ligne.horodatage | date_fr }}</td>
-            <td><a href="/equipements/{{ ligne.equipement_id }}">{{ ligne.equipement_nom }}</a></td>
+            <td>
+              {% if ligne.equipement_id %}
+                <a href="/equipements/{{ ligne.equipement_id }}">{{ ligne.equipement_nom }}</a>
+              {% else %}
+                {{ ligne.equipement_nom }} <span class="meta">(archivé)</span>
+              {% endif %}
+            </td>
             <td>
               <span class="pastille {{ 'type-erreur' if ligne.type_log == 'ERREUR_COLLECTE'
                                     else 'type-alerte' if ligne.type_log == 'ALERTE'

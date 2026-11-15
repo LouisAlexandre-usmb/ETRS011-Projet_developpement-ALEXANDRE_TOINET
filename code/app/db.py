@@ -7,7 +7,8 @@ de connexions partagées.
 import re
 import sqlite3
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from pathlib import Path
 
 from app import config
@@ -33,59 +34,65 @@ def init_db() -> None:
 
 
 def _migrer(connexion: sqlite3.Connection) -> None:
-    """Ajoute les colonnes apparues après la création initiale d'une base existante
-    (pas d'outil de migration dans ce projet : on reste sur de simples ALTER TABLE)."""
+    """Met une base existante au niveau de schema.sql (pas d'outil de migration dans ce
+    projet). Règle unique : toute table dont les colonnes diffèrent de celles décrites dans
+    schema.sql est reconstruite ; les colonnes ajoutées prennent leur valeur par défaut, les
+    colonnes retirées sont abandonnées. Les colonnes attendues sont lues en créant le schéma
+    dans une base temporaire en mémoire : schema.sql reste la seule description des tables."""
+    modele = sqlite3.connect(":memory:")
+    modele.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    tables = [ligne[0] for ligne in modele.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+    a_reconstruire = [table for table in tables
+                      if set(_colonnes(connexion, table)) != set(_colonnes(modele, table))]
+    modele.close()
+
+    # Base d'avant l'agrégation des mesures : 30 j de détail / 365 j agrégés (inutilisé)
+    # deviennent 15 j de détail / 30 j au total.
+    avant_agregation = "duree_conservation_evenements" not in _colonnes(connexion, "parametres_generaux")
+
+    if a_reconstruire:
+        _reconstruire_tables(connexion, a_reconstruire)
+    if avant_agregation:
+        connexion.execute("UPDATE parametres_generaux "
+                          "SET duree_conservation_detail = 15, duree_conservation_agregee = 30")
+
+
+def _reconstruire_tables(connexion: sqlite3.Connection, tables: list[str]) -> None:
+    """Aligne des tables sur schema.sql en les recréant, car ALTER TABLE ne sait ni retirer une
+    colonne qui porte une clé étrangère ou un CHECK, ni modifier une contrainte. Procédure
+    recommandée par la documentation SQLite : les clés étrangères sont désactivées le temps de
+    l'opération (sinon supprimer l'ancienne table « equipement » supprimerait en cascade
+    mesures, interfaces, logs...) et legacy_alter_table est activé (sinon renommer
+    « equipement » redirigerait les références des autres tables vers l'ancienne table). On
+    renomme les anciennes tables, schema.sql recrée les nouvelles, on recopie les colonnes
+    communes, puis on vérifie l'intégrité avant de réactiver les clés étrangères."""
+    connexion.commit()
+    connexion.execute("PRAGMA foreign_keys = OFF")
+    connexion.execute("PRAGMA legacy_alter_table = ON")
     try:
-        connexion.execute("ALTER TABLE interface ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass  # colonne déjà présente (base créée après son ajout au schéma)
+        for table in tables:
+            connexion.execute(f"ALTER TABLE {table} RENAME TO {table}_ancienne")
+        connexion.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        for table in tables:
+            nouvelles = _colonnes(connexion, table)
+            communes = ", ".join(c for c in _colonnes(connexion, f"{table}_ancienne") if c in nouvelles)
+            connexion.execute(f"INSERT INTO {table} ({communes}) SELECT {communes} FROM {table}_ancienne")
+            connexion.execute(f"DROP TABLE {table}_ancienne")
+        connexion.commit()
+        incoherences = connexion.execute("PRAGMA foreign_key_check").fetchall()
+        if incoherences:
+            raise RuntimeError(f"Migration : clés étrangères incohérentes : {incoherences[:5]}")
+    finally:
+        connexion.execute("PRAGMA legacy_alter_table = OFF")
+        connexion.execute("PRAGMA foreign_keys = ON")
 
-    try:
-        connexion.execute("ALTER TABLE equipement ADD COLUMN duree_conservation INTEGER")
-    except sqlite3.OperationalError:
-        pass  # colonne déjà présente
 
-    try:
-        connexion.execute(
-            "ALTER TABLE alerte ADD COLUMN volume_id INTEGER REFERENCES volume(id) ON DELETE SET NULL"
-        )
-    except sqlite3.OperationalError:
-        pass  # colonne déjà présente (une simple colonne nullable, pas de CHECK à élargir ici)
+TABLES_LOGS = ("changement_statut", "erreur_collecte", "alerte")
 
-    for colonne in ("taille_octets", "utilise_octets"):
-        try:
-            connexion.execute(f"ALTER TABLE volume ADD COLUMN {colonne} INTEGER")
-        except sqlite3.OperationalError:
-            pass  # colonne déjà présente
 
-    # alerte.type_alerte doit accepter INTERFACE_INDISPONIBLE, et alerte a besoin d'un
-    # interface_id : un ALTER TABLE ne peut pas élargir une contrainte CHECK existante, donc
-    # on recrée la table (en copiant les lignes) si elle n'a pas encore la nouvelle colonne.
-    colonnes_alerte = [ligne[1] for ligne in connexion.execute("PRAGMA table_info(alerte)").fetchall()]
-    if colonnes_alerte and "interface_id" not in colonnes_alerte:
-        connexion.executescript(
-            "ALTER TABLE alerte RENAME TO alerte_ancienne;"
-            "CREATE TABLE alerte ("
-            "    id                 INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "    equipement_id      INTEGER NOT NULL REFERENCES equipement(id) ON DELETE CASCADE,"
-            "    type_alerte        TEXT NOT NULL CHECK (type_alerte IN"
-            "        ('INDISPONIBILITE', 'SEUIL_DEPASSE', 'INTERFACE_INDISPONIBLE')),"
-            "    etat               TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (etat IN ('ACTIVE', 'CLOTUREE', 'MASQUEE')),"
-            "    date_declenchement TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),"
-            "    date_cloture       TEXT,"
-            "    valeur_mesuree     REAL,"
-            "    message            TEXT NOT NULL,"
-            "    seuil_id           INTEGER REFERENCES seuil(id) ON DELETE SET NULL,"
-            "    interface_id       INTEGER REFERENCES interface(id) ON DELETE SET NULL,"
-            "    cause_racine_id    INTEGER REFERENCES alerte(id)"
-            ");"
-            "INSERT INTO alerte (id, equipement_id, type_alerte, etat, date_declenchement,"
-            "                    date_cloture, valeur_mesuree, message, seuil_id, cause_racine_id) "
-            "SELECT id, equipement_id, type_alerte, etat, date_declenchement,"
-            "       date_cloture, valeur_mesuree, message, seuil_id, cause_racine_id "
-            "FROM alerte_ancienne;"
-            "DROP TABLE alerte_ancienne;"
-        )
+def _colonnes(connexion: sqlite3.Connection, table: str) -> list[str]:
+    return [ligne[1] for ligne in connexion.execute(f"PRAGMA table_info({table})").fetchall()]
 
 
 def _seed(connexion: sqlite3.Connection) -> None:
@@ -228,23 +235,112 @@ def modifier_duree_conservation(id_equipement: int, duree_conservation: int | No
         )
 
 
-def purger_mesures_anciennes() -> int:
-    """Supprime les mesures plus anciennes que la durée de conservation effective de
-    chaque équipement (la sienne si réglée, sinon la valeur par défaut). Renvoie le
-    nombre de lignes supprimées."""
-    parametres = obtenir_parametres_generaux()
-    total_supprime = 0
-    with get_connection() as connexion:
-        equipements = connexion.execute("SELECT id, duree_conservation FROM equipement").fetchall()
-        for equipement in equipements:
-            duree = equipement["duree_conservation"] or parametres["duree_conservation_detail"]
-            curseur = connexion.execute(
-                "DELETE FROM mesure WHERE equipement_id = ? "
-                "AND horodatage < datetime('now', '-' || ? || ' days')",
-                (equipement["id"], duree),
+# ---------------------------------------------------------------- conservation de l'historique
+
+TRANCHE_AGREGATION = 30 * 60  # secondes : 48 mesures agrégées par jour au maximum
+_EPOQUE = datetime(1970, 1, 1)
+
+
+def _en_secondes(instant: datetime) -> float:
+    return (instant - _EPOQUE).total_seconds()
+
+
+def _en_horodatage(secondes: float) -> str:
+    """Même format que les horodatages stockés par SQLite (UTC, « 2026-11-14T10:30:00 ») :
+    toutes les comparaisons de dates se font entre chaînes de ce format."""
+    return (_EPOQUE + timedelta(seconds=secondes)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _il_y_a(jours: int) -> str:
+    maintenant = datetime.now(timezone.utc).replace(tzinfo=None)
+    return _en_horodatage(_en_secondes(maintenant - timedelta(days=jours)))
+
+
+def _debit_entre(precedente, mesure) -> float | None:
+    """Débit (par seconde) entre deux relevés bruts consécutifs d'un compteur. None si l'un
+    des deux manque (équipement injoignable) ou si le compteur est revenu en arrière (remise
+    à zéro ou dépassement de capacité) : un trou plutôt qu'un débit négatif."""
+    if precedente is None or mesure["valeur"] is None or precedente["valeur"] is None:
+        return None
+    delta_valeur = mesure["valeur"] - precedente["valeur"]
+    delta_temps = (datetime.fromisoformat(mesure["horodatage"])
+                   - datetime.fromisoformat(precedente["horodatage"])).total_seconds()
+    return delta_valeur / delta_temps if delta_valeur >= 0 and delta_temps > 0 else None
+
+
+def _agreger_mesures(connexion: sqlite3.Connection, equipement_id: int, avant: str) -> None:
+    """Remplace les mesures brutes antérieures à « avant » par leur résumé par tranche de
+    30 minutes (moyenne, minimum, maximum, nombre d'échantillons). Pour un compteur de
+    trafic par interface, on résume les débits calculés entre relevés successifs (c'est
+    ce qu'affichent les graphiques), pas le compteur brut, qui ne fait que croître."""
+    lignes = connexion.execute(
+        "SELECT mesure.metrique_id, mesure.interface_id, mesure.horodatage, mesure.valeur, "
+        "metrique.type_valeur, metrique.par_interface "
+        "FROM mesure JOIN metrique ON metrique.id = mesure.metrique_id "
+        "WHERE mesure.equipement_id = ? AND mesure.horodatage < ? "
+        "ORDER BY mesure.metrique_id, mesure.interface_id, mesure.horodatage",
+        (equipement_id, avant),
+    ).fetchall()
+
+    # Une série = une métrique sur une interface (ou sur l'équipement entier).
+    for (metrique_id, interface_id), serie in groupby(lignes, key=lambda l: (l["metrique_id"], l["interface_id"])):
+        serie = list(serie)
+        est_debit = serie[0]["type_valeur"] == "COMPTEUR" and serie[0]["par_interface"]
+        tranches: dict[int, list] = {}
+        precedente = None
+        for ligne in serie:
+            valeur = ligne["valeur"]
+            if est_debit:
+                valeur, precedente = _debit_entre(precedente, ligne), ligne
+            debut = int(_en_secondes(datetime.fromisoformat(ligne["horodatage"])) // TRANCHE_AGREGATION)
+            tranches.setdefault(debut * TRANCHE_AGREGATION, []).append(valeur)
+
+        for debut, valeurs in tranches.items():
+            connues = [v for v in valeurs if v is not None]
+            connexion.execute(
+                "INSERT INTO mesure_agregee (equipement_id, metrique_id, interface_id, horodatage, "
+                "moyenne, minimum, maximum, nb_echantillons) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (equipement_id, metrique_id, interface_id, _en_horodatage(debut),
+                 sum(connues) / len(connues) if connues else None,
+                 min(connues, default=None), max(connues, default=None), len(connues)),
             )
-            total_supprime += curseur.rowcount
-    return total_supprime
+    connexion.execute("DELETE FROM mesure WHERE equipement_id = ? AND horodatage < ?", (equipement_id, avant))
+
+
+def entretenir_historique() -> None:
+    """Politique de conservation, appliquée au démarrage puis une fois par jour.
+
+    Mesures, pour chaque équipement (durée : la sienne, sinon duree_conservation_agregee) :
+    toutes les mesures brutes pendant duree_conservation_detail jours (15) ; au-delà, si
+    l'équipement conserve plus longtemps, elles sont agrégées par demi-heure ; tout ce qui
+    dépasse sa durée de conservation est purgé. Logs : changements de statut et alertes
+    clôturées gardés duree_conservation_evenements jours (365), erreurs de collecte
+    duree_conservation_erreurs jours (30). Une alerte encore active n'est jamais purgée."""
+    parametres = obtenir_parametres_generaux()
+    detail = parametres["duree_conservation_detail"]
+    # Limite alignée sur un début de tranche : une demi-heure n'est jamais coupée en deux
+    # entre deux passages (sinon elle serait agrégée deux fois, en deux morceaux).
+    limite_detail = _il_y_a(detail)
+    limite_detail = _en_horodatage(
+        _en_secondes(datetime.fromisoformat(limite_detail)) // TRANCHE_AGREGATION * TRANCHE_AGREGATION)
+
+    with get_connection() as connexion:
+        for equipement in connexion.execute("SELECT id, duree_conservation FROM equipement").fetchall():
+            duree = equipement["duree_conservation"] or parametres["duree_conservation_agregee"]
+            if duree > detail:
+                _agreger_mesures(connexion, equipement["id"], limite_detail)
+            limite_purge = _il_y_a(duree)
+            connexion.execute("DELETE FROM mesure WHERE equipement_id = ? AND horodatage < ?",
+                              (equipement["id"], limite_purge))
+            connexion.execute("DELETE FROM mesure_agregee WHERE equipement_id = ? AND horodatage < ?",
+                              (equipement["id"], limite_purge))
+
+        limite_evenements = _il_y_a(parametres["duree_conservation_evenements"])
+        connexion.execute("DELETE FROM changement_statut WHERE horodatage < ?", (limite_evenements,))
+        connexion.execute("DELETE FROM alerte WHERE etat != 'ACTIVE' "
+                          "AND COALESCE(date_cloture, date_declenchement) < ?", (limite_evenements,))
+        connexion.execute("DELETE FROM erreur_collecte WHERE horodatage < ?",
+                          (_il_y_a(parametres["duree_conservation_erreurs"]),))
 
 
 def changer_modele_supervision(id_equipement: int, modele_supervision_id: int) -> None:
@@ -257,8 +353,32 @@ def changer_modele_supervision(id_equipement: int, modele_supervision_id: int) -
 
 
 def supprimer_equipement(id_equipement: int) -> None:
-    """Supprime un équipement et tout son historique (clés étrangères en cascade)."""
+    """Supprime un équipement et tout ce qui le concerne, immédiatement : ses logs
+    (effacés explicitement, leur clé étrangère étant en SET NULL pour permettre
+    l'archivage), puis l'équipement lui-même, ce qui supprime en cascade ses mesures,
+    mesures agrégées, interfaces et volumes."""
     with get_connection() as connexion:
+        for table in TABLES_LOGS:
+            connexion.execute(f"DELETE FROM {table} WHERE equipement_id = ?", (id_equipement,))
+        connexion.execute("DELETE FROM equipement WHERE id = ?", (id_equipement,))
+
+
+def archiver_equipement(id_equipement: int) -> None:
+    """Retire un équipement en gardant ses logs (changements de statut, alertes, erreurs
+    de collecte), qui suivent ensuite la même politique de conservation que les autres.
+    Ses alertes actives sont clôturées (plus rien ne les réévaluerait), son nom est
+    recopié dans ses logs pour rester affichable, puis il est supprimé : ses mesures,
+    interfaces et volumes disparaissent en cascade, ses logs passent à equipement_id NULL."""
+    with get_connection() as connexion:
+        ligne = connexion.execute("SELECT nom FROM equipement WHERE id = ?", (id_equipement,)).fetchone()
+        if ligne is None:
+            return
+        connexion.execute(
+            "UPDATE alerte SET etat = 'CLOTUREE', date_cloture = strftime('%Y-%m-%dT%H:%M:%S', 'now') "
+            "WHERE equipement_id = ? AND etat = 'ACTIVE'", (id_equipement,))
+        for table in TABLES_LOGS:
+            connexion.execute(f"UPDATE {table} SET nom_equipement_archive = ? WHERE equipement_id = ?",
+                              (ligne["nom"], id_equipement))
         connexion.execute("DELETE FROM equipement WHERE id = ?", (id_equipement,))
 
 
@@ -271,27 +391,16 @@ def obtenir_equipement(id_equipement: int) -> sqlite3.Row | None:
 
 
 def obtenir_equipement_detail(id_equipement: int) -> sqlite3.Row | None:
-    """Équipement avec le nom de son groupe et de son parent, pour la fiche équipement."""
+    """Équipement avec le nom de son groupe et de son modèle, pour la fiche équipement."""
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT equipement.*, groupe.nom AS groupe_nom, parent.nom AS parent_nom, "
-            "modele_supervision.nom AS modele_nom "
+            "SELECT equipement.*, groupe.nom AS groupe_nom, modele_supervision.nom AS modele_nom "
             "FROM equipement "
             "LEFT JOIN groupe ON groupe.id = equipement.groupe_id "
-            "LEFT JOIN equipement AS parent ON parent.id = equipement.parent_id "
             "JOIN modele_supervision ON modele_supervision.id = equipement.modele_supervision_id "
             "WHERE equipement.id = ?",
             (id_equipement,),
         ).fetchone()
-
-
-def lister_enfants(id_equipement: int) -> list[sqlite3.Row]:
-    """Équipements dont le parent est celui-ci."""
-    with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT id, nom, statut FROM equipement WHERE parent_id = ? ORDER BY nom",
-            (id_equipement,),
-        ).fetchall()
 
 
 def lister_interfaces(equipement_id: int) -> list[sqlite3.Row]:
@@ -306,16 +415,18 @@ def lister_interfaces(equipement_id: int) -> list[sqlite3.Row]:
 def dernieres_valeurs_par_interface(equipement_id: int, code_metrique: str) -> dict[int, float]:
     """Dernière valeur connue d'une métrique par-interface (ex. taux d'utilisation), pour
     chaque interface d'un équipement. Renvoie {interface_id: valeur}, pour affichage sur la
-    fiche équipement (cf. fiche_equipement.html)."""
+    fiche équipement (cf. fiche_equipement.html).
+
+    Un seul passage sur les mesures : avec MAX() dans une requête groupée, SQLite renvoie les
+    autres colonnes (ici valeur) de la ligne qui porte ce maximum, c'est-à-dire la plus
+    récente de chaque interface. Une sous-requête corrélée (une recherche par mesure) devenait
+    très lente dès quelques jours d'historique sur un équipement à nombreuses interfaces."""
     with get_connection() as connexion:
         lignes = connexion.execute(
-            "SELECT mesure.interface_id, mesure.valeur FROM mesure "
+            "SELECT mesure.interface_id, mesure.valeur, MAX(mesure.id) FROM mesure "
             "JOIN metrique ON metrique.id = mesure.metrique_id "
             "WHERE mesure.equipement_id = ? AND metrique.code = ? AND mesure.interface_id IS NOT NULL "
-            "AND mesure.id = ("
-            "    SELECT MAX(m2.id) FROM mesure AS m2 WHERE m2.equipement_id = mesure.equipement_id "
-            "    AND m2.metrique_id = mesure.metrique_id AND m2.interface_id = mesure.interface_id"
-            ")",
+            "GROUP BY mesure.interface_id",
             (equipement_id, code_metrique),
         ).fetchall()
         return {ligne["interface_id"]: ligne["valeur"] for ligne in lignes}
@@ -366,14 +477,18 @@ def basculer_visibilite_volume(volume_id: int) -> int | None:
 
 
 def _filtre_logs(equipement_id: int | None, depuis: str | None, jusqu_a: str | None,
-                  colonne_horodatage: str = "horodatage") -> tuple[str, list]:
+                  colonne_horodatage: str = "horodatage", nom_archive: str | None = None) -> tuple[str, list]:
     """Construit la clause WHERE commune aux tables de logs, et ses paramètres. Le nom de
-    la colonne horodatage varie selon la table (alerte utilise date_declenchement)."""
+    la colonne horodatage varie selon la table (alerte utilise date_declenchement). Un
+    équipement archivé n'a plus d'id : on le filtre par le nom recopié dans ses logs."""
     condition = "1 = 1"
     parametres: list = []
     if equipement_id is not None:
         condition += " AND equipement_id = ?"
         parametres.append(equipement_id)
+    if nom_archive is not None:
+        condition += " AND equipement_id IS NULL AND nom_equipement_archive = ?"
+        parametres.append(nom_archive)
     if depuis:
         condition += f" AND {colonne_horodatage} >= ?"
         parametres.append(depuis)
@@ -383,50 +498,69 @@ def _filtre_logs(equipement_id: int | None, depuis: str | None, jusqu_a: str | N
     return condition, parametres
 
 
+# Les trois types de logs : table, colonne d'horodatage, et texte affiché dans « Détail ».
+TYPES_LOGS = {
+    "CHANGEMENT_STATUT": ("changement_statut", "horodatage", "(ancien_statut || ' -> ' || nouveau_statut)"),
+    "ERREUR_COLLECTE": ("erreur_collecte", "horodatage", "(type_erreur || COALESCE(' : ' || message, ''))"),
+    "ALERTE": ("alerte", "date_declenchement", "message"),
+}
+
+
+def _types_retenus(type_log: str | None) -> list[str]:
+    """Un type précis si demandé (et connu), sinon les trois."""
+    return [type_log] if type_log in TYPES_LOGS else list(TYPES_LOGS)
+
+
 def compter_logs(equipement_id: int | None = None, depuis: str | None = None,
-                  jusqu_a: str | None = None) -> int:
+                  jusqu_a: str | None = None, nom_archive: str | None = None,
+                  type_log: str | None = None) -> int:
     """Nombre total de logs correspondant aux filtres (pour la pagination)."""
-    condition_cs, parametres_cs = _filtre_logs(equipement_id, depuis, jusqu_a)
-    condition_ec, parametres_ec = _filtre_logs(equipement_id, depuis, jusqu_a)
-    condition_al, parametres_al = _filtre_logs(equipement_id, depuis, jusqu_a, "date_declenchement")
+    comptages, parametres = [], []
+    for type_ in _types_retenus(type_log):
+        table, colonne_horodatage, _ = TYPES_LOGS[type_]
+        condition, parametres_type = _filtre_logs(equipement_id, depuis, jusqu_a, colonne_horodatage, nom_archive)
+        comptages.append(f"(SELECT COUNT(*) FROM {table} WHERE {condition})")
+        parametres += parametres_type
     with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT (SELECT COUNT(*) FROM changement_statut WHERE " + condition_cs + ") + "
-            "       (SELECT COUNT(*) FROM erreur_collecte WHERE " + condition_ec + ") + "
-            "       (SELECT COUNT(*) FROM alerte WHERE " + condition_al + ") AS total",
-            parametres_cs + parametres_ec + parametres_al,
-        ).fetchone()["total"]
+        return connexion.execute(f"SELECT {' + '.join(comptages)} AS total", parametres).fetchone()["total"]
 
 
 def lister_logs(equipement_id: int | None = None, depuis: str | None = None,
-                 jusqu_a: str | None = None, limite: int = 50, decalage: int = 0) -> list[sqlite3.Row]:
+                 jusqu_a: str | None = None, limite: int = 50, decalage: int = 0,
+                 nom_archive: str | None = None, type_log: str | None = None) -> list[sqlite3.Row]:
     """Historique unifié (changements de statut + erreurs de collecte + alertes), le plus
-    récent en premier, filtrable par équipement et par plage de dates, et paginé. Chaque
-    ligne porte un type_log pour les distinguer à l'affichage."""
-    condition_cs, parametres_cs = _filtre_logs(equipement_id, depuis, jusqu_a)
-    condition_ec, parametres_ec = _filtre_logs(equipement_id, depuis, jusqu_a)
-    condition_al, parametres_al = _filtre_logs(equipement_id, depuis, jusqu_a, "date_declenchement")
+    récent en premier, filtrable par type de log, par équipement (actif, ou archivé via son
+    nom) et par plage de dates, et paginé. Chaque ligne porte un type_log pour les
+    distinguer à l'affichage ; equipement_id est NULL pour un équipement archivé (pas de
+    fiche à lier). Seules les tables des types retenus entrent dans l'UNION ALL."""
+    selections, parametres = [], []
+    for type_ in _types_retenus(type_log):
+        table, colonne_horodatage, detail = TYPES_LOGS[type_]
+        condition, parametres_type = _filtre_logs(equipement_id, depuis, jusqu_a, colonne_horodatage, nom_archive)
+        selections.append(
+            f"SELECT equipement_id, nom_equipement_archive, {colonne_horodatage} AS horodatage, "
+            f"'{type_}' AS type_log, {detail} AS detail FROM {table} WHERE {condition}")
+        parametres += parametres_type
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT equipement.id AS equipement_id, equipement.nom AS equipement_nom, "
+            "SELECT sous_requete.equipement_id, "
+            "COALESCE(equipement.nom, sous_requete.nom_equipement_archive) AS equipement_nom, "
             "sous_requete.horodatage, sous_requete.type_log, sous_requete.detail "
-            "FROM ("
-            "   SELECT equipement_id, horodatage, 'CHANGEMENT_STATUT' AS type_log, "
-            "          (ancien_statut || ' -> ' || nouveau_statut) AS detail "
-            "   FROM changement_statut WHERE " + condition_cs + " "
-            "   UNION ALL "
-            "   SELECT equipement_id, horodatage, 'ERREUR_COLLECTE' AS type_log, "
-            "          (type_erreur || COALESCE(' : ' || message, '')) AS detail "
-            "   FROM erreur_collecte WHERE " + condition_ec + " "
-            "   UNION ALL "
-            "   SELECT equipement_id, date_declenchement AS horodatage, 'ALERTE' AS type_log, "
-            "          message AS detail "
-            "   FROM alerte WHERE " + condition_al +
-            ") AS sous_requete "
-            "JOIN equipement ON equipement.id = sous_requete.equipement_id "
+            f"FROM ({' UNION ALL '.join(selections)}) AS sous_requete "
+            "LEFT JOIN equipement ON equipement.id = sous_requete.equipement_id "
             "ORDER BY sous_requete.horodatage DESC LIMIT ? OFFSET ?",
-            parametres_cs + parametres_ec + parametres_al + [limite, decalage],
+            parametres + [limite, decalage],
         ).fetchall()
+
+
+def lister_noms_equipements_archives() -> list[str]:
+    """Noms des équipements archivés qui ont encore des logs (pour le filtre de la page Logs)."""
+    with get_connection() as connexion:
+        return [ligne[0] for ligne in connexion.execute(
+            " UNION ".join(f"SELECT nom_equipement_archive FROM {table} "
+                           "WHERE equipement_id IS NULL AND nom_equipement_archive IS NOT NULL"
+                           for table in TABLES_LOGS) + " ORDER BY 1"
+        ).fetchall()]
 
 
 def lister_mesures(equipement_id: int, code_metrique: str, interface_id: int | None = None,
@@ -470,17 +604,35 @@ def lister_debit(equipement_id: int, code_metrique: str, interface_id: int | Non
     resultat = []
     precedente = None
     for mesure in mesures:
-        debit = None
-        if (precedente is not None and mesure["valeur"] is not None
-                and precedente["valeur"] is not None):
-            delta_valeur = mesure["valeur"] - precedente["valeur"]
-            delta_temps = (datetime.fromisoformat(mesure["horodatage"])
-                           - datetime.fromisoformat(precedente["horodatage"])).total_seconds()
-            if delta_valeur >= 0 and delta_temps > 0:
-                debit = delta_valeur / delta_temps
-        resultat.append({"horodatage": mesure["horodatage"], "valeur": debit})
+        resultat.append({"horodatage": mesure["horodatage"], "valeur": _debit_entre(precedente, mesure)})
         precedente = mesure
     return resultat
+
+
+def lister_mesures_agregees(equipement_id: int, code_metrique: str, interface_id: int | None = None,
+                            depuis: str | None = None, jusqu_a: str | None = None) -> list[dict]:
+    """Mesures agrégées (une par demi-heure) d'une métrique, au même format que les mesures
+    brutes pour les graphiques : « valeur » = la moyenne de la tranche (déjà un débit pour
+    un compteur de trafic). Minimum et maximum sont fournis en plus."""
+    condition = "mesure_agregee.equipement_id = ? AND metrique.code = ?"
+    parametres: list = [equipement_id, code_metrique]
+    if interface_id is not None:
+        condition += " AND mesure_agregee.interface_id = ?"
+        parametres.append(interface_id)
+    if depuis:
+        condition += " AND mesure_agregee.horodatage >= ?"
+        parametres.append(depuis)
+    if jusqu_a:
+        condition += " AND mesure_agregee.horodatage <= ?"
+        parametres.append(jusqu_a)
+    with get_connection() as connexion:
+        return [dict(ligne) for ligne in connexion.execute(
+            "SELECT mesure_agregee.horodatage, mesure_agregee.moyenne AS valeur, "
+            "mesure_agregee.minimum, mesure_agregee.maximum "
+            "FROM mesure_agregee JOIN metrique ON metrique.id = mesure_agregee.metrique_id "
+            f"WHERE {condition} ORDER BY mesure_agregee.horodatage",
+            parametres,
+        ).fetchall()]
 
 
 def debit_instantane(equipement_id: int, metrique_id: int, interface_id: int) -> float | None:
@@ -597,22 +749,15 @@ def supprimer_groupe_si_vide(groupe_id: int) -> None:
 
 # ---------------------------------------------------------------- collecte
 
-def lister_equipements_actifs() -> list[sqlite3.Row]:
-    """Renvoie les équipements à collecter (actif = 1)."""
-    with get_connection() as connexion:
-        return connexion.execute("SELECT * FROM equipement WHERE actif = 1").fetchall()
-
-
 def lister_equipements_a_collecter(intervalle_polling_defaut: int) -> list[sqlite3.Row]:
-    """Équipements actifs dont l'intervalle effectif (le leur, ou la valeur par défaut) est
-    écoulé depuis la dernière collecte (ou qui n'ont encore jamais été collectés)."""
+    """Équipements dont l'intervalle effectif (le leur, ou la valeur par défaut) est écoulé
+    depuis la dernière collecte (ou qui n'ont encore jamais été collectés)."""
     with get_connection() as connexion:
         return connexion.execute(
-            "SELECT * FROM equipement WHERE actif = 1 AND ("
+            "SELECT * FROM equipement WHERE "
             "   derniere_collecte IS NULL"
             "   OR (strftime('%s', 'now') - strftime('%s', derniere_collecte)) "
-            "       >= COALESCE(intervalle_polling, ?)"
-            ")",
+            "       >= COALESCE(intervalle_polling, ?)",
             (intervalle_polling_defaut,),
         ).fetchall()
 
@@ -922,7 +1067,7 @@ def definir_seuil(metrique_id: int, operateur: str, valeur_seuil: float) -> None
         connexion.execute(
             "INSERT INTO seuil (metrique_id, operateur, valeur_seuil) VALUES (?, ?, ?) "
             "ON CONFLICT (metrique_id) DO UPDATE SET "
-            "operateur = excluded.operateur, valeur_seuil = excluded.valeur_seuil, actif = 1",
+            "operateur = excluded.operateur, valeur_seuil = excluded.valeur_seuil",
             (metrique_id, operateur, valeur_seuil),
         )
 
@@ -942,11 +1087,10 @@ def supprimer_seuil(metrique_id: int) -> None:
         connexion.execute("DELETE FROM seuil WHERE id = ?", (seuil["id"],))
 
 
-def obtenir_seuil_actif(metrique_id: int) -> sqlite3.Row | None:
+def obtenir_seuil(metrique_id: int) -> sqlite3.Row | None:
+    """Le seuil global d'une métrique, ou None s'il n'y en a pas."""
     with get_connection() as connexion:
-        return connexion.execute(
-            "SELECT * FROM seuil WHERE metrique_id = ? AND actif = 1", (metrique_id,)
-        ).fetchone()
+        return connexion.execute("SELECT * FROM seuil WHERE metrique_id = ?", (metrique_id,)).fetchone()
 
 
 def _degrader_si_necessaire(connexion: sqlite3.Connection, equipement_id: int) -> None:

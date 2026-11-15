@@ -13,8 +13,6 @@ services:
       - ./app:/code/app          # le code local est monté : une modif = rechargement auto
       - donnees:/code/data       # base SQLite persistante
     environment:
-      SNMP_TARGET: snmp-agent    # nom du service ci-dessous (résolu par le DNS de Docker)
-      SNMP_COMMUNITY: public
       DB_PATH: /code/data/supervision.db
       WATCHFILES_FORCE_POLLING: "true"   # nécessaire pour détecter les modifs depuis Windows
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

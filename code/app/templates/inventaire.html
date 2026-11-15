@@ -56,7 +56,7 @@
       <form method="get" action="/inventaire#modifier" class="formulaire formulaire-ligne">
         <label>Nom ou adresse IP
           <input type="text" name="modifier" list="dl-equipements"
-                 placeholder="ex. Switch-TP ou 192.168.140.141" required>
+                 placeholder="ex. SW-CORE-01 ou 10.0.0.1" required>
         </label>
         <button type="submit">Rechercher</button>
       </form>
@@ -93,15 +93,26 @@
   </details>
 
   <details class="carte" id="supprimer" {{ 'open' if section_ouverte == 'supprimer' }}>
-    <summary>Supprimer un équipement de la supervision</summary>
+    <summary>Retirer un équipement de la supervision</summary>
     {% if equipements %}
-      <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne"
-            onsubmit="return confirm('Confirmer la suppression de cet équipement et de son historique ?')">
+      <p class="meta">
+        <strong>Archiver</strong> : l'équipement, sa fiche et ses mesures disparaissent, mais ses logs
+        (changements de statut, alertes, erreurs de collecte) restent consultables dans la page Logs.<br>
+        <strong>Supprimer</strong> : tout ce qui concerne l'équipement est effacé immédiatement, logs compris.
+      </p>
+      <form method="post" action="/equipements/supprimer" class="formulaire formulaire-ligne">
         <label>Nom ou adresse IP
           <input type="text" name="recherche" list="dl-equipements"
-                 placeholder="ex. Switch-TP ou 192.168.140.141" required>
+                 placeholder="ex. SW-CORE-01 ou 10.0.0.1" required>
         </label>
-        <button type="submit" class="bouton-danger">Supprimer</button>
+        <button type="submit" name="action" value="archiver"
+                onclick="return confirm('Archiver cet équipement ? Sa fiche et ses mesures seront supprimées, ses logs conservés.')">
+          Archiver
+        </button>
+        <button type="submit" name="action" value="supprimer" class="bouton-danger"
+                onclick="return confirm('Supprimer définitivement cet équipement et tout son historique, logs compris ?')">
+          Supprimer
+        </button>
       </form>
     {% else %}
       <p class="meta">Aucun équipement enregistré pour le moment.</p>

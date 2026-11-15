@@ -36,16 +36,6 @@
         <dl>
           <div><dt>Groupe</dt><dd>{{ equipement.groupe_nom or '—' }}</dd></div>
           <div><dt>Description</dt><dd>{{ (equipement.description or '—') | truncate(120) }}</dd></div>
-          <div><dt>Parent</dt><dd>
-            {% if equipement.parent_nom %}
-              <a href="/equipements/{{ equipement.parent_id }}">{{ equipement.parent_nom }}</a>
-            {% else %}—{% endif %}
-          </dd></div>
-          <div><dt>Enfants</dt><dd>
-            {% if enfants %}
-              {% for en in enfants %}<a href="/equipements/{{ en.id }}">{{ en.nom }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
-            {% else %}—{% endif %}
-          </dd></div>
         </dl>
       </div>
       <div class="identite-bloc">
@@ -238,17 +228,22 @@
       <button type="submit">Enregistrer</button>
     </form>
 
+    {% set conservation = equipement.duree_conservation or parametres.duree_conservation_agregee %}
     <p class="meta">
-      Conservation des mesures :
-      {{ equipement.duree_conservation or parametres.duree_conservation_detail }} j
+      Conservation des mesures : {{ conservation }} j
       {% if not equipement.duree_conservation %}(valeur par défaut){% endif %}
+      {% if conservation > parametres.duree_conservation_detail %}
+        — en détail sur les {{ parametres.duree_conservation_detail }} derniers jours, puis en moyennes par demi-heure
+      {% else %}
+        — en détail
+      {% endif %}
     </p>
     <form method="post" action="/equipements/{{ equipement.id }}/duree-conservation"
           class="formulaire formulaire-ligne">
-      <label>Conservation, en jours (vide = valeur par défaut, {{ parametres.duree_conservation_detail }} j ; 30 j max)
-        <input type="number" name="duree_conservation" min="1" max="30"
+      <label>Conservation, en jours (vide = valeur par défaut, {{ parametres.duree_conservation_agregee }} j ; {{ parametres.duree_conservation_agregee }} j max)
+        <input type="number" name="duree_conservation" min="1" max="{{ parametres.duree_conservation_agregee }}"
                value="{{ equipement.duree_conservation or '' }}"
-               placeholder="{{ parametres.duree_conservation_detail }}">
+               placeholder="{{ parametres.duree_conservation_agregee }}">
       </label>
       <button type="submit">Enregistrer</button>
     </form>

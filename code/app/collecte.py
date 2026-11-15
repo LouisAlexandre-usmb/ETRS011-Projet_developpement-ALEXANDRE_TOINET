@@ -1,6 +1,6 @@
 """Service de collecte SNMP.
 
-Pour chaque équipement actif, interroge les éléments surveillés de son modèle de
+Pour chaque équipement, interroge les éléments surveillés de son modèle de
 supervision et enregistre les mesures. Un échec sur un équipement (ou sur un indicateur
 précis) n'empêche jamais la collecte du reste du parc : chaque équipement, et chaque
 indicateur, est traité indépendamment.
@@ -32,7 +32,6 @@ OID_HR_STORAGE_TYPE = "1.3.6.1.2.1.25.2.3.1.2"
 OID_HR_STORAGE_DESCR = "1.3.6.1.2.1.25.2.3.1.3"
 OID_HR_STORAGE_ALLOC_UNITS = "1.3.6.1.2.1.25.2.3.1.4"  # taille en octets d'une unité d'allocation
 OID_HR_STORAGE_SIZE = "1.3.6.1.2.1.25.2.3.1.5"
-OID_HR_STORAGE_USED = "1.3.6.1.2.1.25.2.3.1.6"
 HR_STORAGE_RAM = "1.3.6.1.2.1.25.2.1.2"     # valeur de hrStorageType pour la mémoire vive
 HR_STORAGE_VOLUME = "1.3.6.1.2.1.25.2.1.4"  # valeur de hrStorageType pour un volume (type SNMP
                                              # "disque fixe", mais ce sont des points de montage,
@@ -61,17 +60,10 @@ CISCO_MEM_POOL_PRINCIPAL = "Processor"  # pool qui représente la mémoire syst�
 STATUT_INTERFACE_SNMP = {1: "UP", 2: "DOWN"}  # ifOperStatus ; toute autre valeur -> INCONNU
 
 
-async def collecter_tout() -> None:
-    """Lance la collecte de tous les équipements actifs, en parallèle (un équipement lent
-    ne doit pas retarder les autres, cf. règle métier d'indépendance). Ignore l'intervalle
-    de polling : utile pour un déclenchement manuel, pas pour le planificateur."""
-    equipements = db.lister_equipements_actifs()
-    await asyncio.gather(*(collecter_equipement(equipement) for equipement in equipements))
-
-
 async def verifier_echeances() -> None:
-    """Appelée périodiquement par le planificateur : ne collecte que les équipements dont
-    l'intervalle de polling (le leur, ou la valeur par défaut) est écoulé."""
+    """Appelée périodiquement par le planificateur : collecte, en parallèle, les équipements
+    dont l'intervalle de polling (le leur, ou la valeur par défaut) est écoulé. Un
+    équipement lent ne retarde pas les autres (règle métier d'indépendance)."""
     parametres = db.obtenir_parametres_generaux()
     equipements = db.lister_equipements_a_collecter(parametres["intervalle_polling_defaut"])
     await asyncio.gather(*(collecter_equipement(equipement) for equipement in equipements))
@@ -237,7 +229,7 @@ def _calculer_utilisation_interfaces(equipement: dict, interfaces: dict[int, int
     metrique = db.obtenir_metrique("utilisation_interface")
     metrique_in = db.obtenir_metrique("if_in_octets")
     metrique_out = db.obtenir_metrique("if_out_octets")
-    seuil = db.obtenir_seuil_actif(metrique["id"])
+    seuil = db.obtenir_seuil(metrique["id"])
 
     for interface_id in interfaces.values():
         interface = db.obtenir_interface(interface_id)
@@ -362,7 +354,7 @@ async def _collecter_volumes(equipement: dict, element, timeout: float, retries:
     unites = await snmp_walk(host, community, OID_HR_STORAGE_ALLOC_UNITS, timeout=timeout, retries=retries)
     utilisees = await snmp_walk(host, community, element["oid"], timeout=timeout, retries=retries)
     tailles = await snmp_walk(host, community, OID_HR_STORAGE_SIZE, timeout=timeout, retries=retries)
-    seuil = db.obtenir_seuil_actif(element["metrique_id"])
+    seuil = db.obtenir_seuil(element["metrique_id"])
 
     for oid_type, type_valeur in types.items():
         if str(type_valeur) != HR_STORAGE_VOLUME:
@@ -399,7 +391,7 @@ async def _collecter_volumes(equipement: dict, element, timeout: float, retries:
 def _verifier_seuil(equipement_id: int, metrique_id: int, valeur: float) -> None:
     """Après un relevé réussi : déclenche ou résout l'alerte de dépassement de seuil de
     cette métrique pour cet équipement (le seuil lui-même est global, cf. db.py)."""
-    seuil = db.obtenir_seuil_actif(metrique_id)
+    seuil = db.obtenir_seuil(metrique_id)
     if seuil is None:
         return
     if _seuil_depasse(valeur, seuil["operateur"], seuil["valeur_seuil"]):

@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app import collecte, config, db
-from app.snmp_client import SnmpError, lire_infos_systeme, snmp_get, snmp_walk
+from app.snmp_client import SnmpError, lire_description_systeme, snmp_get, snmp_walk
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -32,16 +32,16 @@ TICK_PLANIFICATEUR = 10
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    db.purger_mesures_anciennes()  # rattrape tout retard pris pendant un arrêt prolongé
+    db.entretenir_historique()  # rattrape tout retard pris pendant un arrêt prolongé
     planificateur = AsyncIOScheduler()
     planificateur.add_job(collecte.verifier_echeances, "interval", seconds=TICK_PLANIFICATEUR)
-    planificateur.add_job(db.purger_mesures_anciennes, "interval", hours=24)
+    planificateur.add_job(db.entretenir_historique, "interval", hours=24)
     planificateur.start()
     yield
     planificateur.shutdown()
 
 
-app = FastAPI(title="Supervision SNMP", version="0.7.0", lifespan=lifespan)
+app = FastAPI(title="Supervision SNMP", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -72,18 +72,6 @@ class NouvelEquipement(BaseModel):
     communaute_snmp: str = "public"
     description: str | None = None
     groupe_id: int | None = None
-
-
-async def _interroger_cible() -> tuple[dict | None, str | None]:
-    """Interroge l'équipement de test ; renvoie (infos, erreur)."""
-    try:
-        infos = await lire_infos_systeme(
-            config.SNMP_TARGET, config.SNMP_COMMUNITY, config.SNMP_PORT,
-            timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
-        )
-        return infos, None
-    except SnmpError as exc:
-        return None, str(exc)
 
 
 # Métriques déjà affichées par un graphique ou un tableau spécifique sur la fiche équipement.
@@ -123,7 +111,6 @@ async def fiche_equipement(request: Request, id_equipement: int):
         "codes_actifs": codes_actifs,
         "metriques_graphes": metriques_graphes,
         "alertes_actives": db.lister_alertes("ACTIVE", id_equipement),
-        "enfants": db.lister_enfants(id_equipement),
         "interfaces": db.lister_interfaces(id_equipement),
         "utilisations_interfaces": db.dernieres_valeurs_par_interface(id_equipement, "utilisation_interface"),
         "volumes": db.lister_volumes(id_equipement),
@@ -235,10 +222,14 @@ TAILLE_PAGE_LOGS = 50
 
 @app.get("/logs", response_class=HTMLResponse)
 async def logs(request: Request):
-    """Historique unifié (changements de statut + erreurs de collecte), filtrable par
-    équipement et par créneau de dates, paginé (50 lignes par page)."""
-    equipement_id_filtre = request.query_params.get("equipement_id")
-    equipement_id_filtre = int(equipement_id_filtre) if equipement_id_filtre else None
+    """Historique unifié (changements de statut, erreurs de collecte, alertes), filtrable
+    par équipement et par créneau de dates, paginé (50 lignes par page). Le filtre
+    équipement vaut l'id d'un équipement existant, ou « archive:<nom> » pour un équipement
+    archivé (supprimé, mais dont les logs sont conservés)."""
+    filtre_equipement = request.query_params.get("equipement_id") or None
+    equipement_id_filtre = int(filtre_equipement) if filtre_equipement and filtre_equipement.isdigit() else None
+    nom_archive = (filtre_equipement.removeprefix("archive:")
+                   if filtre_equipement and filtre_equipement.startswith("archive:") else None)
 
     depuis = request.query_params.get("depuis") or None
     jusqu_a = request.query_params.get("jusqu_a") or None
@@ -247,19 +238,24 @@ async def logs(request: Request):
     page_brute = request.query_params.get("page", "1")
     page = int(page_brute) if page_brute.isdigit() else 1
 
-    total = db.compter_logs(equipement_id_filtre, depuis, jusqu_a_requete)
+    type_log = request.query_params.get("type") or None
+
+    total = db.compter_logs(equipement_id_filtre, depuis, jusqu_a_requete, nom_archive, type_log)
     nb_pages = max(1, -(-total // TAILLE_PAGE_LOGS))  # division entière arrondie au-dessus
     page = max(1, min(page, nb_pages))
 
     filtre_qs = urlencode({k: v for k, v in {
-        "equipement_id": equipement_id_filtre, "depuis": depuis, "jusqu_a": jusqu_a,
+        "type": type_log, "equipement_id": filtre_equipement, "depuis": depuis, "jusqu_a": jusqu_a,
     }.items() if v})
 
     return templates.TemplateResponse(request, "logs.html", {
         "logs": db.lister_logs(equipement_id_filtre, depuis, jusqu_a_requete,
-                                limite=TAILLE_PAGE_LOGS, decalage=(page - 1) * TAILLE_PAGE_LOGS),
+                                limite=TAILLE_PAGE_LOGS, decalage=(page - 1) * TAILLE_PAGE_LOGS,
+                                nom_archive=nom_archive, type_log=type_log),
+        "type_filtre": type_log,
         "equipements": db.lister_equipements(),
-        "equipement_id_filtre": equipement_id_filtre,
+        "equipements_archives": db.lister_noms_equipements_archives(),
+        "filtre_equipement": filtre_equipement,
         "depuis_filtre": depuis,
         "jusqu_a_filtre": jusqu_a,
         "page": page,
@@ -309,7 +305,7 @@ async def ajouter_equipement_html(
 ):
     """Ajoute un équipement depuis le formulaire de la page Inventaire."""
     try:
-        infos = await lire_infos_systeme(
+        description_systeme = await lire_description_systeme(
             adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
         )
     except SnmpError as exc:
@@ -318,7 +314,7 @@ async def ajouter_equipement_html(
     try:
         db.creer_equipement(
             nom=nom, adresse=adresse, communaute_snmp=communaute_snmp,
-            description=description or None, description_systeme=infos["sysDescr"],
+            description=description or None, description_systeme=description_systeme,
             groupe_id=int(groupe_id) if groupe_id else None,
             modele_supervision_id=modele_supervision_id,
         )
@@ -330,13 +326,17 @@ async def ajouter_equipement_html(
 
 
 @app.post("/equipements/supprimer")
-async def supprimer_equipement_html(recherche: str = Form(...)):
-    """Supprime l'équipement trouvé par nom ou adresse depuis le formulaire de recherche."""
+async def supprimer_equipement_html(recherche: str = Form(...), action: str = Form("supprimer")):
+    """Retire l'équipement trouvé par nom ou adresse : « archiver » garde ses logs
+    (changements de statut, alertes, erreurs de collecte), « supprimer » efface tout."""
     equipement = db.trouver_equipement(recherche)
     if equipement is None:
         message = f"Aucun équipement (ou plusieurs) ne correspond à « {recherche} »"
         return RedirectResponse(f"/inventaire?erreur={quote(message)}&section=supprimer#supprimer", status_code=303)
-    db.supprimer_equipement(equipement["id"])
+    if action == "archiver":
+        db.archiver_equipement(equipement["id"])
+    else:
+        db.supprimer_equipement(equipement["id"])
     return RedirectResponse("/inventaire?section=supprimer#supprimer", status_code=303)
 
 
@@ -358,12 +358,11 @@ async def modifier_equipement_html(
     description_systeme = equipement["description_systeme"]
     if adresse != equipement["adresse"] or communaute_snmp != equipement["communaute_snmp"]:
         try:
-            infos = await lire_infos_systeme(
+            description_systeme = await lire_description_systeme(
                 adresse, communaute_snmp, timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
             )
         except SnmpError as exc:
             return RedirectResponse(f"/inventaire?erreur={quote(str(exc))}&section=modifier#modifier", status_code=303)
-        description_systeme = infos["sysDescr"]
 
     try:
         db.modifier_equipement(
@@ -579,15 +578,6 @@ async def sante():
     return {"statut": "ok", "version": app.version}
 
 
-@app.get("/api/equipement-test")
-async def equipement_test():
-    """Groupe "system" de l'équipement de test, au format JSON (démo sans base)."""
-    infos, erreur = await _interroger_cible()
-    if erreur:
-        return JSONResponse(status_code=504, content={"cible": config.SNMP_TARGET, "erreur": erreur})
-    return {"cible": config.SNMP_TARGET, **infos}
-
-
 @app.get("/api/equipements")
 async def lister_equipements_api():
     """Liste des équipements enregistrés."""
@@ -601,23 +591,26 @@ async def mesures_equipement_api(id_equipement: int, metrique: str,
     """Historique des relevés d'une métrique pour un équipement (et, si fournie, une
     interface). Query params : metrique (code, ex. "cpu"), interface_id, depuis, jusqu_a.
     Un compteur de trafic par interface (if_in_octets/if_out_octets) est renvoyé comme un
-    débit (octets/s), pas comme le compteur brut : cf. db.lister_debit."""
+    débit (octets/s), pas comme le compteur brut : cf. db.lister_debit. Les mesures de plus
+    de 15 jours n'existent plus qu'agrégées par demi-heure : elles viennent en tête de la
+    liste (elles sont toutes plus anciennes que les mesures brutes restantes)."""
     if db.obtenir_equipement(id_equipement) is None:
         return JSONResponse(status_code=404, content={"erreur": "Équipement introuvable"})
 
+    agregees = db.lister_mesures_agregees(id_equipement, metrique, interface_id, depuis, jusqu_a)
     metrique_ligne = db.obtenir_metrique(metrique)
     if metrique_ligne and metrique_ligne["type_valeur"] == "COMPTEUR" and metrique_ligne["par_interface"]:
-        return db.lister_debit(id_equipement, metrique, interface_id, depuis, jusqu_a)
+        return agregees + db.lister_debit(id_equipement, metrique, interface_id, depuis, jusqu_a)
 
     mesures = db.lister_mesures(id_equipement, metrique, interface_id, depuis, jusqu_a)
-    return [dict(ligne) for ligne in mesures]
+    return agregees + [dict(ligne) for ligne in mesures]
 
 
 @app.post("/api/equipements", status_code=201)
 async def creer_equipement_api(payload: NouvelEquipement):
     """Ajoute un équipement, après un test de connectivité SNMP (lecture de sysDescr)."""
     try:
-        infos = await lire_infos_systeme(
+        description_systeme = await lire_description_systeme(
             payload.adresse, payload.communaute_snmp,
             timeout=config.SNMP_TIMEOUT, retries=config.SNMP_RETRIES,
         )
@@ -627,7 +620,7 @@ async def creer_equipement_api(payload: NouvelEquipement):
     try:
         id_equipement = db.creer_equipement(
             nom=payload.nom, adresse=payload.adresse, communaute_snmp=payload.communaute_snmp,
-            description=payload.description, description_systeme=infos["sysDescr"],
+            description=payload.description, description_systeme=description_systeme,
             groupe_id=payload.groupe_id,
         )
     except sqlite3.IntegrityError:
